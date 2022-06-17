@@ -1,0 +1,19 @@
+[package]
+name = "fosh"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+lalrpop = "0.19.8"
+
+[dependencies]
+termion="1.5.6"
+keycodes = "0.1.0"
+clib = "0.2.1"
+nix = "0.24.1"
+lalrpop-util = "0.19.8"
+regex = "1"
+downcast-rs = "1.2.0"
+typed-arena = "2.0.1"

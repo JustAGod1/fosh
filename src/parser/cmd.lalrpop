@@ -1,0 +1,69 @@
+use crate::parser::ast::*;
+use lalrpop_util::ErrorRecovery;
+
+grammar<'err>(error: &'err mut bool);
+
+pub Cmd : ASTNode = {
+    <NodeParent<Function>>, <NodeParent<Command>>,
+     <l: @L> ! <r: @R> => ASTNode::new(Span::new(l, r), Box::new(ErroredASTValue::new(ASTKind::CommandName)), vec![])
+
+}
+
+Command : (Command, Vec<ASTNode>) = {
+    <name: Node<CommandName>> <args: Node<Literal>*> => {
+      let mut vec = Vec::new();
+      vec.push(name);
+      vec.extend(args);
+
+      (Command::new(), vec)
+    }
+}
+
+
+
+Function : (FunctionCall, Vec<ASTNode>) = {
+    <amp: Node<Ampersand>><name: Node<FunctionName>><args: NodeParent<ParenArgs>> => (FunctionCall::new(), vec![amp, name, args]),
+    <amp: Node<Ampersand>><name: Node<FunctionName>> => (FunctionCall::new(), vec![amp, name])
+}
+
+ParenArgs : (ParenInvocation, Vec<ASTNode>) = {
+    <lparen: Node<OpenParen>><args: Node<ValueLiteral>*><rparen: Node<CloseParen>> => {
+        let mut vec = Vec::new();
+        vec.push(lparen);
+        vec.extend(args);
+        vec.push(rparen);
+        (ParenInvocation::new(), vec)
+    }
+}
+
+NodeParent<T> : ASTNode = {
+ <l: @L> <v: T> <r: @R> => ASTNode::new(Span::new(l, r), v.0.boxed(), v.1),
+};
+Node<T> : ASTNode = {
+ <l: @L> <v: T> <r: @R> => ASTNode::new(Span::new(l, r), v, vec![]),
+};
+
+ValueLiteral : Box<dyn ASTValue> = {
+    <v: LiteralString> => ValueLiteral::new().boxed()
+}
+
+FunctionName: Box<dyn ASTValue> = {
+    <s : LiteralString> => Box::new(FunctionName::new()),
+    ! => {
+        *error = true;
+        Box::new(ErroredASTValue::new(ASTKind::FunctionName))
+    }
+}
+Ampersand: Box<dyn ASTValue> = <s : "&"> => Ampersand::new().boxed();
+OpenParen: Box<dyn ASTValue> = <s : r"\("> => OpenParen::new().boxed();
+CloseParen: Box<dyn ASTValue> = {
+    <s : r"\)"> => CloseParen::new().boxed(),
+    ! => {
+        *error = true;
+        ErroredASTValue::new(ASTKind::CloseParen).boxed()
+    }
+
+ };
+Literal: Box<dyn ASTValue> = <s : LiteralString> => Literal::new().boxed();
+CommandName: Box<dyn ASTValue> = <s : LiteralString> => CommandName::new().boxed();
+LiteralString: () = <s : r"[^ \t\n&()|;]+"> => ();
