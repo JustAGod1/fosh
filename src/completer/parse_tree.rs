@@ -1,19 +1,20 @@
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::ops::Deref;
 use typed_arena::Arena;
-use crate::parser::ast::{ASTKind, ASTNode, ErroredASTValue};
+use crate::parser::ast::{ASTKind, ASTNode, ASTValue, ASTError};
 
+#[derive(Debug)]
 pub struct PTNode<'a> {
     pub data: &'a str,
     pub kind: ASTKind,
     pub origin: &'a ASTNode,
-    pub children: RefCell<Vec<&'a PTNode<'a>>>,
+    children: RefCell<Vec<&'a PTNode<'a>>>,
     pub parent: Cell<Option<&'a PTNode<'a>>>,
 }
 
 impl<'a> PTNode<'a> {
     pub fn text(&'a self) -> &'a str {
-        return self.origin.span.slice(self.data);
+        return self.data;
     }
 
 
@@ -44,6 +45,34 @@ impl<'a> PTNode<'a> {
     pub fn is_leaf(&self) -> bool {
         self.children.borrow().is_empty()
     }
+
+    pub fn find_child_with_kind<'b>(&'b self, kind: ASTKind) -> Option<&'b PTNode<'a>> {
+        for child in self.children.borrow().iter() {
+            if child.kind == kind {
+                return Some(child);
+            }
+        }
+        return None;
+    }
+    pub fn find_child_with_kind_rec<'b>(&'b self, kind: ASTKind) -> Option<&'b PTNode<'a>> {
+        if self.kind == kind {
+            return Some(self);
+        }
+        for child in self.children.borrow().iter() {
+            let v = child.find_child_with_kind_rec(kind);
+            if v.is_some() { return v;}
+        }
+        return None;
+    }
+
+    pub fn children(&'a self) -> Ref<Vec<&PTNode<'a>>> {
+        return RefCell::borrow(&self.children);
+    }
+
+    pub fn value<T: ASTValue>(&self) -> &T {
+        self.origin.value.downcast_ref().unwrap()
+    }
+
 }
 
 
@@ -63,7 +92,6 @@ impl <'a>ParseTree<'a> {
             ast,
             root: Default::default()
         };
-
 
 
         result
@@ -96,7 +124,7 @@ impl<'a> ParseTreeBuilder<'a> {
 
     fn parse_node(&'a self, node: &'a ASTNode) -> &'a PTNode<'a> {
         let kind = match node.value.kind() {
-            ASTKind::Error => node.value.downcast_ref::<ErroredASTValue>().unwrap().expected,
+            ASTKind::Error => node.value.downcast_ref::<ASTError>().unwrap().expected,
             _ => node.value.kind()
         };
         let node: &'a mut PTNode = self.arena.alloc(PTNode {

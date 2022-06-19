@@ -142,9 +142,6 @@ impl<'a> Iterator for Tokenizer<'a> {
         };
 
 
-        if matches!(token, Some(ASTKind::Ampersand)) {
-            return Some(Err((span.start, span.end)));
-        }
         let slice = match &self.state {
             TokenizerState::TopLevel(l) => l.remainder(),
             TokenizerState::FunctionLevel(l) => l.remainder()

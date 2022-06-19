@@ -18,3 +18,4 @@ regex = "1"
 downcast-rs = "1.2.0"
 typed-arena = "2.0.1"
 logos = "0.12.1"
+rand = { version = "0.8.5" , features = ["small_rng"] }

@@ -1,8 +1,11 @@
 
 use std::fmt::{Debug};
 use downcast_rs::{Downcast, impl_downcast};
+use lalrpop_util::ErrorRecovery;
+use lalrpop_util::lexer::Token;
 use termion::color::{Cyan, Fg, Green, Magenta, Yellow};
 use crate::builtin::entity::Type;
+use crate::completer::parse_tree::PTNode;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Span {
@@ -60,6 +63,16 @@ impl ASTNode {
         Self { span, value, children }
     }
 
+    pub fn find_child_with_kind(&self, kind: ASTKind) -> Option<&ASTNode> {
+        if self.value.kind() == kind {
+            return Some(self);
+        }
+        for child in self.children.iter() {
+            let v = child.find_child_with_kind(kind);
+            if v.is_some() { return v;}
+        }
+        return None;
+    }
 
 
 }
@@ -69,6 +82,8 @@ impl ASTNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ASTKind {
     CommandLine,
+    Piped,
+    Sequenced,
 
     // General mode tokens
     Ampersand,
@@ -180,26 +195,57 @@ simple_token!(Identifier, ASTKind::Identifier);
 simple_token!(ParenthesizedArgumentsList, ASTKind::ParenthesizedArgumentsList);
 simple_token!(PropertyCall, ASTKind::PropertyCall);
 simple_token!(PropertyName, ASTKind::PropertyName);
-simple_token!(CallChain, ASTKind::CallChain);
 simple_token!(Command, ASTKind::Command);
 simple_token!(CommandName, ASTKind::CommandName);
 simple_token!(CommandArguments, ASTKind::CommandArguments);
 simple_token!(Function, ASTKind::Function);
 simple_token!(CommandLine, ASTKind::CommandLine);
-
+simple_token!(Piped, ASTKind::Piped);
+simple_token!(Sequenced, ASTKind::Sequenced);
 
 #[derive(Debug)]
-pub struct ErroredASTValue {
-    pub expected: ASTKind,
+pub struct CallChain {
+
 }
 
-impl ErroredASTValue {
-    pub fn new(expected: ASTKind) -> Self {
-        Self { expected }
+impl CallChain {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    pub fn get_left_hand<'a>(&self, node: &'a PTNode<'a>) -> Option<&'a PTNode<'a>> {
+        return node
+            .children()
+            .get(0)
+            .filter(|x| matches!(x.kind, ASTKind::CallChain | ASTKind::PropertyCall))
+            .map(|x| *x);
+    }
+
+    pub fn get_right_hand<'a>(&self, node: &'a PTNode<'a>) -> Option<&'a PTNode<'a>> {
+        return node.find_child_with_kind(ASTKind::PropertyCall)
     }
 }
 
-impl ASTValue for ErroredASTValue {
+impl ASTValue for CallChain {
+    fn kind(&self) -> ASTKind {
+        ASTKind::CallChain
+    }
+}
+
+
+#[derive(Debug)]
+pub struct ASTError {
+    pub expected: ASTKind,
+    pub error: ErrorRecovery<usize, ASTKind, (usize, usize)>
+}
+
+impl ASTError {
+    pub fn new(expected: ASTKind, error: ErrorRecovery<usize, ASTKind, (usize, usize)>) -> Self {
+        Self { expected, error }
+    }
+}
+
+impl ASTValue for ASTError {
     fn kind(&self) -> ASTKind {
         ASTKind::Error
     }

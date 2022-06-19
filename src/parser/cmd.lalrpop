@@ -27,20 +27,29 @@ extern {
 
 pub Delimited : ASTNode = {
 
-    <ll: @L> <mut v: CommandOrFunctionWithSemicolon*> <e: CommandOrFunction?> <rr: @R> => {
-        match e {
-            Some(e) => v.push(vec![e]),
-            _ => {}
-        }
+    <ll: @L> <v: SequencedWithSemicolon+> <rr: @R> => {
         ASTNode::new_simple(ll, rr, CommandLine::new(), v.into_iter().flatten().collect())
-    }
+    },
+    <Sequenced>
 }
 
 
-CommandOrFunctionWithSemicolon : Vec<ASTNode> = {
-    <e: CommandOrFunction> <s: Node<SemiColon>> => {
+SequencedWithSemicolon : Vec<ASTNode> = {
+    <e: Sequenced> <s: Node<SemiColon>> => {
         vec![e,s]
     }
+}
+
+Sequenced : ASTNode = {
+    <ll: @L> <left: Sequenced> <pipe: Node<Ampersand>> <right: Piped> <rr: @R> =>
+         ASTNode::new_simple(ll, rr, Sequenced::new(), vec![left, pipe, right]),
+     <Piped>
+}
+
+Piped : ASTNode = {
+    <ll: @L> <left: Piped> <pipe: Node<Pipe>> <right: CommandOrFunction> <rr: @R> =>
+         ASTNode::new_simple(ll, rr, Piped::new(), vec![left, pipe, right]),
+     <CommandOrFunction>
 }
 
 CommandOrFunction : ASTNode = {<NodeParent<Command>>, <NodeParent<Function>>}
@@ -48,7 +57,8 @@ CommandOrFunction : ASTNode = {<NodeParent<Command>>, <NodeParent<Function>>}
 Command : (Command, Vec<ASTNode>) = {
     <name: Node<CommandName>> <args: NodeParent<CommandArguments>> => {
         (Command::new(), vec![name, args])
-    }
+    },
+    <ll: @L><err: !><rr: @R> => (Command::new(), vec![ASTNode::new_simple(ll, rr, ASTError::new(ASTKind::CommandName, err), vec![])])
 }
 CommandName : CommandName = {
     <l: Literal> => CommandName::new()
@@ -77,6 +87,9 @@ CallChain : ASTNode = {
 PropertyCall : (PropertyCall, Vec<ASTNode>) = {
     <name: Node<PropertyName>> => (PropertyCall::new(), vec![name]),
     <name: Node<PropertyName>> <args: NodeParent<ParenthesizedArgumentsList>> => (PropertyCall::new(), vec![name, args]),
+    <ll: @L><error: !><rr: @R> => (PropertyCall::new(), vec![
+         ASTNode::new_simple(ll, rr, ASTError::new(ASTKind::PropertyName, error), vec![])
+         ]),
 }
 
 ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
@@ -89,11 +102,11 @@ ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
         (ParenthesizedArgumentsList::new(), result)
     },
 
-    <l: Node<OpenParen>> <args: Value*> <ll: @L>!<rr: @R> => {
+    <l: Node<OpenParen>> <args: Value*> <ll: @L><err: !><rr: @R> => {
         let mut result = Vec::new();
         result.push(l);
         result.extend(args);
-        result.push(ASTNode::new_simple(ll, rr, ErroredASTValue::new(ASTKind::CloseParen), vec![]));
+        result.push(ASTNode::new_simple(ll, rr, ASTError::new(ASTKind::CloseParen, err), vec![]));
 
         (ParenthesizedArgumentsList::new(), result)
     }
