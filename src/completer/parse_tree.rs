@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::ops::Deref;
 use typed_arena::Arena;
 use crate::parser::ast::{ASTKind, ASTNode, ErroredASTValue};
 
@@ -33,24 +34,62 @@ impl<'a> PTNode<'a> {
         return None;
     }
 
+    pub fn walk<F>(&self, visitor: &mut F) where F : FnMut(&PTNode) {
+        visitor(self);
+        for child in Deref::deref(&self.children.borrow()) {
+            child.walk(visitor);
+        }
+    }
+
     pub fn is_leaf(&self) -> bool {
         self.children.borrow().is_empty()
     }
 }
 
-pub struct ParseTreeBuilder<'a> {
+
+
+pub struct ParseTree<'a> {
+    builder: ParseTreeBuilder<'a>,
+    root: Cell<Option<&'a PTNode<'a>>>,
+    ast: ASTNode,
+}
+
+impl <'a>ParseTree<'a> {
+
+    pub fn new(command: &'a str, ast: ASTNode) -> Self {
+        let builder = ParseTreeBuilder::new(command);
+        let result = Self {
+            builder,
+            ast,
+            root: Default::default()
+        };
+
+
+
+        result
+    }
+
+    pub fn root(&'a self) -> &'a PTNode<'a> {
+        if self.root.get().is_none() {
+            self.root.set(Some(self.builder.parse_ast(&self.ast)));
+        }
+        self.root.get().unwrap()
+    }
+}
+
+struct ParseTreeBuilder<'a> {
     data: &'a str,
     arena: Arena<PTNode<'a>>,
 }
 
 impl<'a> ParseTreeBuilder<'a> {
-    pub fn new(data: &'a str) -> Self {
+    fn new(data: &'a str) -> Self {
         Self {
             data,
             arena: Arena::new(),
         }
     }
-    pub fn parse_ast(&'a self, ast: &'a ASTNode) -> &'a PTNode<'a> {
+    fn parse_ast(&'a self, ast: &'a ASTNode) -> &'a PTNode<'a> {
         return self.parse_node(ast);
     }
 

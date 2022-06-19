@@ -1,8 +1,10 @@
-use std::fmt;
-use std::fmt::{Debug, Display, Formatter};
-use downcast_rs::{Downcast, impl_downcast};
-use termion::color::{Color, Cyan, Fg, Green, Magenta, Yellow};
 
+use std::fmt::{Debug};
+use downcast_rs::{Downcast, impl_downcast};
+use termion::color::{Cyan, Fg, Green, Magenta, Yellow};
+use crate::builtin::entity::Type;
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct Span {
     start: usize,
     end: usize
@@ -30,46 +32,74 @@ impl Span {
     }
 }
 
+#[derive(Debug)]
 pub struct ASTNode {
     pub span: Span,
     pub value: Box<dyn ASTValue>,
     pub children: Vec<ASTNode>,
 }
 
+impl PartialEq for ASTNode {
+    fn eq(&self, other: &Self) -> bool {
+        if self.span != other.span { return false; }
+        if self.value.kind() != other.value.kind() { return false; }
+        if self.children != other.children { return false; }
+
+        true
+    }
+}
+
+impl Eq for ASTNode {}
+
 impl ASTNode {
 
+    pub fn new_simple<T: ASTValue>(l: usize, r: usize, value: T, children: Vec<ASTNode>) -> Self {
+        return Self::new(Span::new(l, r), Box::new(value), children);
+    }
     pub fn new(span: Span, value: Box<dyn ASTValue>, children: Vec<ASTNode>) -> Self {
         Self { span, value, children }
     }
 
-    pub fn walk<F>(&self, visitor: &mut F) where F : FnMut(&ASTNode) {
-        visitor(self);
-        for child in &self.children {
-            child.walk(visitor);
-        }
-    }
 
 
-    pub fn is_leaf(&self) -> bool {
-        self.children.is_empty()
-    }
 }
 
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ASTKind {
+    CommandLine,
+
+    // General mode tokens
     Ampersand,
-    FunctionName,
-    FunctionCall,
+    Pipe,
+    SemiColon,
+    Dollar,
+
+    // Function mode tokens
     OpenParen,
     CloseParen,
-    ParenInvocation,
-    Literal,
-    CommandName,
-    Command,
-    ValueLiteral,
+    OpenBrace,
+    CloseBrace,
+    StringLiteral,
+    NumberLiteral,
+    Dot,
     Comma,
+    Identifier,
+    Literal,
+
+    // Function mode non-terminals
+    Function,
+    ParenthesizedArgumentsList,
+    PropertyCall,
+    PropertyName,
+    CallChain,
+
+    // Command mode non-terminals
+    Command,
+    CommandName,
+    CommandArguments,
+
     Error
 
 }
@@ -78,12 +108,9 @@ impl ASTKind {
     // returns unique color for each kind
     pub fn color(&self, buf: &mut String)  {
         match self {
-            ASTKind::Ampersand => buf.push_str(&Fg(Cyan).to_string()),
-            ASTKind::FunctionName => buf.push_str(&Fg(Yellow).to_string()),
+            ASTKind::Dollar => buf.push_str(&Fg(Cyan).to_string()),
             ASTKind::OpenParen => buf.push_str(&Fg(termion::color::LightMagenta).to_string()),
             ASTKind::CloseParen => buf.push_str(&Fg(termion::color::Blue).to_string()),
-            ASTKind::CommandName => buf.push_str(&Fg(Magenta).to_string()),
-            ASTKind::ValueLiteral => buf.push_str(&Fg(Green).to_string()),
             _ => {}
         }
     }
@@ -137,16 +164,29 @@ macro_rules! simple_token {
 
 
 simple_token!(Ampersand, ASTKind::Ampersand);
-simple_token!(FunctionName, ASTKind::FunctionName);
-simple_token!(FunctionCall, ASTKind::FunctionCall);
 simple_token!(OpenParen, ASTKind::OpenParen);
 simple_token!(CloseParen, ASTKind::CloseParen);
-simple_token!(ParenInvocation, ASTKind::ParenInvocation);
 simple_token!(Literal, ASTKind::Literal);
-simple_token!(CommandName, ASTKind::CommandName);
-simple_token!(Command, ASTKind::Command);
-simple_token!(ValueLiteral, ASTKind::ValueLiteral);
+simple_token!(OpenBrace, ASTKind::OpenBrace);
+simple_token!(CloseBrace, ASTKind::CloseBrace);
+simple_token!(Dot, ASTKind::Dot);
 simple_token!(Comma, ASTKind::Comma);
+simple_token!(SemiColon, ASTKind::SemiColon);
+simple_token!(Dollar, ASTKind::Dollar);
+simple_token!(Pipe, ASTKind::Pipe);
+simple_token!(StringLiteral, ASTKind::StringLiteral);
+simple_token!(NumberLiteral, ASTKind::NumberLiteral);
+simple_token!(Identifier, ASTKind::Identifier);
+simple_token!(ParenthesizedArgumentsList, ASTKind::ParenthesizedArgumentsList);
+simple_token!(PropertyCall, ASTKind::PropertyCall);
+simple_token!(PropertyName, ASTKind::PropertyName);
+simple_token!(CallChain, ASTKind::CallChain);
+simple_token!(Command, ASTKind::Command);
+simple_token!(CommandName, ASTKind::CommandName);
+simple_token!(CommandArguments, ASTKind::CommandArguments);
+simple_token!(Function, ASTKind::Function);
+simple_token!(CommandLine, ASTKind::CommandLine);
+
 
 #[derive(Debug)]
 pub struct ErroredASTValue {

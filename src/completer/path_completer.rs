@@ -7,7 +7,6 @@ use crate::completer::Completer;
 use crate::completer::parse_tree::PTNode;
 
 pub struct PathCompleter {
-    updating: AtomicBool,
     names: Arc<Mutex<Vec<String>>>,
 }
 
@@ -32,7 +31,6 @@ impl PathCompleter {
     pub fn new() -> Self {
         let r = Self {
             names: Default::default(),
-            updating: AtomicBool::new(false),
         };
         let arc = r.names.clone();
         std::thread::spawn(move || {

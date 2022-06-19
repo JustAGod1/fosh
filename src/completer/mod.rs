@@ -13,7 +13,7 @@ pub(crate) struct CompleterManager {
 impl CompleterManager {
     pub fn new() -> Self {
         let mut map: HashMap<ASTKind, Box<dyn Completer>> = HashMap::new();
-        map.insert(ASTKind::CommandName, Box::new(path_completer::PathCompleter::new()));
+        //map.insert(ASTKind::CommandName, Box::new(path_completer::PathCompleter::new()));
         Self {
             completer: map
         }

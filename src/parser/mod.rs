@@ -1,62 +1,120 @@
 pub mod ast;
+mod tokenizer;
 mod cmd;
 
-pub use cmd::*;
+use crate::parser::ast::{ASTKind, ASTNode};
+use cmd::*;
+use crate::parser::tokenizer::Tokenizer;
+
+trait ParserAdapter {
+    fn parse(&self, cmd: &str) -> Result<ASTNode, lalrpop_util::ParseError<usize, ASTKind, (usize, usize)>>;
+}
+
+impl ParserAdapter for DelimitedParser {
+    fn parse(&self, cmd: &str) -> Result<ASTNode, lalrpop_util::ParseError<usize, ASTKind, (usize, usize)>> {
+        let tokens = tokenizer::Tokenizer::new(cmd);
+        return self.parse(tokens);
+    }
+}
+
+pub fn parse(data: &str) -> Result<ASTNode, lalrpop_util::ParseError<usize, ASTKind, (usize, usize)>> {
+    let parser = DelimitedParser::new();
+    return parser.parse(Tokenizer::new(data));
+}
 
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::ast::{ASTKind, ASTNode};
-    use crate::parser::CmdParser;
+    use crate::parser::ast::{ASTNode, Span};
+    use crate::parser::ast::*;
+    use crate::parser::cmd::DelimitedParser;
+    use crate::parser::ParserAdapter;
+    use crate::parser::tokenizer::Tokenizer;
 
-    #[test]
-    fn correct_function_call() {
-        let input = "&k";
+    fn build_ast<T: ParserAdapter>(adapter: T, data: &str) -> ASTNode {
+        adapter.parse(data).unwrap()
+    }
 
-        let mut error = false;
-        let node = CmdParser::new().parse(&mut error, input).unwrap();
-        assert!(!error);
+    fn assert_parsed(data: &str) {
+        let ast = DelimitedParser::new().parse(Tokenizer::new(data));
 
-        assert_eq!(node.value.as_ref().unwrap().kind().clone(), ASTKind::FunctionCall);
-        assert_eq!(node.children.get(0).unwrap().value.as_ref().unwrap().kind().clone(), ASTKind::Ampersand);
-        assert_eq!(node.children.get(1).unwrap().value.as_ref().unwrap().kind().clone(), ASTKind::FunctionName);
+        assert!(ast.is_ok(), "Parsing failed: {}\n Error: {:?}", data, ast.err().unwrap());
     }
 
     #[test]
-    fn correct_edge_walk_correct_input() {
-        correct_edge_walk("&f")
+    fn test_parse_empty() {
+        assert_parsed("");
     }
 
     #[test]
-    fn correct_edge_walk_incorrect_input() {
-        correct_edge_walk("f&f")
-    }
-
-    fn correct_edge_walk(input: &str) {
-        let mut error = false;
-        let node = CmdParser::new().parse(&mut error, input).unwrap();
-        assert!(!error);
-
-        let mut s = String::new();
-
-        node.walk(&mut |n| {
-            if n.is_leaf() { s.push_str(n.span.slice(input)) }
-        });
-
-        assert_eq!(input, s)
+    fn test_parse_simple_property() {
+        assert_parsed("$foo");
     }
 
     #[test]
-    fn incorrect_with_correct_tail() {
-        let input = "f&f";
-
-        let mut error = false;
-        let node = CmdParser::new().parse(&mut error, input).unwrap();
-        assert!(!error);
-
-
-
+    fn test_parse_property_invocation_one_arg() {
+        assert_parsed("$foo(5)");
+        assert_parsed(r#"$foo("kek")"#);
+        assert_parsed(r#"$foo(5.0)"#);
     }
 
+    #[test]
+    fn test_parse_property_invocation_some_args() {
+        // Homogeneous
+        assert_parsed("$foo(5 5)");
+        assert_parsed(r#"$foo("kek" "lol" "arbidol")"#);
+        assert_parsed(r#"$foo(5.0 88.9 84.0)"#);
 
+        // Heterogeneous
+        assert_parsed(r#"$foo(5 "fdf" 8.9)"#);
+    }
+
+    #[test]
+    fn test_parse_chain_function() {
+        assert_parsed(r#"$foo.kek()"#);
+        assert_parsed(r#"$foo().kek()"#);
+        assert_parsed(r#"$foo(543).kek()"#);
+        assert_parsed(r#"$foo().kek("fd")"#);
+    }
+
+    #[test]
+    fn test_parse_several_modes() {
+        assert_parsed(r#"$foo ; echo"#);
+        assert_parsed(r#"$foo.lol ; echo"#);
+        assert_parsed(r#"$foo.lol("fdfda") ; echo ; $fdfd"#);
+    }
+
+    #[test]
+    fn simple() {
+        let ast = build_ast(DelimitedParser::new(), "echo hello");
+        let expected = ASTNode {
+            span: Span::new(0, 10),
+            value: CommandLine::new().boxed(),
+            children: vec![
+                ASTNode {
+                    span: Span::new(0,10),
+                    value: Command::new().boxed(),
+                    children: vec![
+                        ASTNode {
+                            span: Span::new(0, 4),
+                            value: CommandName::new().boxed(),
+                            children: vec![]
+                        },
+                        ASTNode {
+                            span: Span::new(5, 10),
+                            value: CommandArguments::new().boxed(),
+                            children: vec![
+                                ASTNode {
+                                    span: Span::new(5, 10),
+                                    value: Literal::new().boxed(),
+                                    children: vec![]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+        assert_eq!(ast, expected);
+    }
 }

@@ -1,69 +1,172 @@
 use crate::parser::ast::*;
 use lalrpop_util::ErrorRecovery;
 
-grammar<'err>(error: &'err mut bool);
+grammar();
 
-pub Cmd : ASTNode = {
-    <NodeParent<Function>>, <NodeParent<Command>>,
-     <l: @L> ! <r: @R> => ASTNode::new(Span::new(l, r), Box::new(ErroredASTValue::new(ASTKind::CommandName)), vec![])
+extern {
+    type Location = usize;
+    type Error = (usize, usize);
 
+    enum ASTKind {
+        "&" => ASTKind::Ampersand,
+        "|" => ASTKind::Pipe,
+        ";" => ASTKind::SemiColon,
+        "$" => ASTKind::Dollar,
+        "(" => ASTKind::OpenParen,
+        ")" => ASTKind::CloseParen,
+        "{" => ASTKind::OpenBrace,
+        "}" => ASTKind::CloseBrace,
+        "string" => ASTKind::StringLiteral,
+        "number" => ASTKind::NumberLiteral,
+        "." => ASTKind::Dot,
+        "," => ASTKind::Comma,
+        "literal" => ASTKind::Literal,
+        "identifier" => ASTKind::Identifier,
+    }
 }
+
+pub Delimited : ASTNode = {
+
+    <ll: @L> <mut v: CommandOrFunctionWithSemicolon*> <e: CommandOrFunction?> <rr: @R> => {
+        match e {
+            Some(e) => v.push(vec![e]),
+            _ => {}
+        }
+        ASTNode::new_simple(ll, rr, CommandLine::new(), v.into_iter().flatten().collect())
+    }
+}
+
+
+CommandOrFunctionWithSemicolon : Vec<ASTNode> = {
+    <e: CommandOrFunction> <s: Node<SemiColon>> => {
+        vec![e,s]
+    }
+}
+
+CommandOrFunction : ASTNode = {<NodeParent<Command>>, <NodeParent<Function>>}
 
 Command : (Command, Vec<ASTNode>) = {
-    <name: Node<CommandName>> <args: Node<Literal>*> => {
-      let mut vec = Vec::new();
-      vec.push(name);
-      vec.extend(args);
+    <name: Node<CommandName>> <args: NodeParent<CommandArguments>> => {
+        (Command::new(), vec![name, args])
+    }
+}
+CommandName : CommandName = {
+    <l: Literal> => CommandName::new()
+}
+CommandArguments : (CommandArguments, Vec<ASTNode>) = {
+    <v: Node<Literal>*> => {
+        (CommandArguments::new(), v)
+    }
+}
 
-      (Command::new(), vec)
+Delimeter : ASTNode = {
+    <Node<SemiColon>>, <Node<Pipe>>, <Node<Ampersand>>
+}
+
+Function : (Function, Vec<ASTNode>) = {
+    <dollar: Node<Dollar>> <chain: CallChain> => (Function::new(), vec![dollar, chain])
+}
+
+CallChain : ASTNode = {
+    <ll: @L> <l: CallChain> <d: Node<Dot>> <call: NodeParent<PropertyCall>> <rr: @R> => {
+        ASTNode::new_simple(ll, rr, CallChain::new(), vec![l, d, call])
+     },
+     <call: NodeParent<PropertyCall>> => call
+}
+
+PropertyCall : (PropertyCall, Vec<ASTNode>) = {
+    <name: Node<PropertyName>> => (PropertyCall::new(), vec![name]),
+    <name: Node<PropertyName>> <args: NodeParent<ParenthesizedArgumentsList>> => (PropertyCall::new(), vec![name, args]),
+}
+
+ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
+    <l: Node<OpenParen>> <args: Value*> <r: Node<CloseParen>> => {
+        let mut result = Vec::new();
+        result.push(l);
+        result.extend(args);
+        result.push(r);
+
+        (ParenthesizedArgumentsList::new(), result)
+    },
+
+    <l: Node<OpenParen>> <args: Value*> <ll: @L>!<rr: @R> => {
+        let mut result = Vec::new();
+        result.push(l);
+        result.extend(args);
+        result.push(ASTNode::new_simple(ll, rr, ErroredASTValue::new(ASTKind::CloseParen), vec![]));
+
+        (ParenthesizedArgumentsList::new(), result)
     }
 }
 
 
-
-Function : (FunctionCall, Vec<ASTNode>) = {
-    <amp: Node<Ampersand>><name: Node<FunctionName>><args: NodeParent<ParenArgs>> => (FunctionCall::new(), vec![amp, name, args]),
-    <amp: Node<Ampersand>><name: Node<FunctionName>> => (FunctionCall::new(), vec![amp, name])
+Value : ASTNode = {
+    <n : Node<StringLiteral>> => n,
+    <n : Node<NumberLiteral>> => n,
+    <n : Node<Identifier>> => n
 }
 
-ParenArgs : (ParenInvocation, Vec<ASTNode>) = {
-    <lparen: Node<OpenParen>><args: Node<ValueLiteral>*><rparen: Node<CloseParen>> => {
-        let mut vec = Vec::new();
-        vec.push(lparen);
-        vec.extend(args);
-        vec.push(rparen);
-        (ParenInvocation::new(), vec)
-    }
-}
 
 NodeParent<T> : ASTNode = {
  <l: @L> <v: T> <r: @R> => ASTNode::new(Span::new(l, r), v.0.boxed(), v.1),
 };
 Node<T> : ASTNode = {
- <l: @L> <v: T> <r: @R> => ASTNode::new(Span::new(l, r), v, vec![]),
+ <l: @L> <v: T> <r: @R> => ASTNode::new(Span::new(l, r), v.boxed(), vec![]),
 };
 
-ValueLiteral : Box<dyn ASTValue> = {
-    <v: LiteralString> => ValueLiteral::new().boxed()
+Identifier : Identifier = {
+    "identifier" => Identifier::new(),
 }
 
-FunctionName: Box<dyn ASTValue> = {
-    <s : LiteralString> => Box::new(FunctionName::new()),
-    ! => {
-        *error = true;
-        Box::new(ErroredASTValue::new(ASTKind::FunctionName))
-    }
+Ampersand : Ampersand = {
+    "&" => Ampersand::new(),
 }
-Ampersand: Box<dyn ASTValue> = <s : "&"> => Ampersand::new().boxed();
-OpenParen: Box<dyn ASTValue> = <s : r"\("> => OpenParen::new().boxed();
-CloseParen: Box<dyn ASTValue> = {
-    <s : r"\)"> => CloseParen::new().boxed(),
-    ! => {
-        *error = true;
-        ErroredASTValue::new(ASTKind::CloseParen).boxed()
-    }
 
- };
-Literal: Box<dyn ASTValue> = <s : LiteralString> => Literal::new().boxed();
-CommandName: Box<dyn ASTValue> = <s : LiteralString> => CommandName::new().boxed();
-LiteralString: () = <s : r"[^ \t\n&()|;]+"> => ();
+Pipe : Pipe = {
+    "|" => Pipe::new(),
+}
+
+SemiColon : SemiColon = {
+    ";" => SemiColon::new(),
+}
+
+Dollar : Dollar = {
+    "$" => Dollar::new(),
+}
+
+OpenParen : OpenParen = {
+    "(" => OpenParen::new(),
+}
+
+CloseParen : CloseParen = {
+    ")" => CloseParen::new(),
+}
+
+OpenBrace : OpenBrace = {
+    "{" => OpenBrace::new(),
+}
+
+CloseBrace : CloseBrace = {
+    "}" => CloseBrace::new(),
+}
+
+StringLiteral : StringLiteral = {
+    "string" => StringLiteral::new(),
+}
+
+PropertyName : PropertyName = {
+    "identifier" => PropertyName::new(),
+}
+
+NumberLiteral : NumberLiteral = {
+    "number" => NumberLiteral::new(),
+}
+
+Dot : Dot = {
+    "." => Dot::new(),
+}
+
+Literal : Literal = {
+    "literal" => Literal::new(),
+}
+

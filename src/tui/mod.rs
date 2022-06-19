@@ -4,9 +4,9 @@ use std::io::Write;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::IntoRawMode;
-use crate::{completer, parser};
+use crate::{parser};
 use crate::completer::CompleterManager;
-use crate::completer::parse_tree::ParseTreeBuilder;
+use crate::completer::parse_tree::ParseTree;
 use crate::parser::ast::ASTNode;
 
 pub struct TUI {
@@ -73,8 +73,15 @@ impl TUI {
 
     fn update_data(&self, stdout: &mut std::io::Stdout) {
         let ast = self.parse_command();
-        let highlighted = self.highlight_command(&ast);
-        let completions = self.find_completions(&ast);
+
+        let (highlighted, completions) = match ast {
+            Some(ast) => {
+                (self.highlight_command(&ast), self.find_completions(&ast))
+            }
+            None => {
+                (self.command.clone(), Vec::new())
+            }
+        };
         let mut shift = 0;
 
         write!(stdout, "\r{}", csi!("0J")).unwrap();
@@ -88,17 +95,18 @@ impl TUI {
         write!(stdout, "\r{}{}", self.prompt, highlighted).unwrap();
     }
 
-    fn parse_command(&self) -> ASTNode {
-        let mut error = false;
-        let node = parser::CmdParser::new().parse(&mut error, &self.command).unwrap();
+    fn parse_command(&self) -> Option<ParseTree> {
+        let ast = parser::parse(&self.command);
+        if ast.is_err() {
+            return None;
+        }
+        let tree = ParseTree::new(&self.command, ast.unwrap());
 
-        return node;
+        return Some(tree);
     }
 
-    fn find_completions(&self, node: &ASTNode) -> Vec<String> {
-        let builder = ParseTreeBuilder::new(&self.command);
-        let tree = builder.parse_ast(node);
-
+    fn find_completions<'a>(&self, tree: &'a ParseTree<'a>) -> Vec<String> {
+        let tree = tree.root();
 
         if let Some(n) = tree.find_leaf_on_pos(self.cursor_pos) {
             self.completer.complete(&n)
@@ -108,16 +116,17 @@ impl TUI {
     }
 
 
-    fn highlight_command(&self, node: &ASTNode) -> String {
+    fn highlight_command<'a>(&self, tree: &'a ParseTree<'a>) -> String {
+        let node = tree.root();
         let command = &self.command;
         let mut insertions = HashMap::<usize, Vec<String>>::new();
         let mut result = String::new();
 
         node.walk(&mut |node| {
-            let v = &node.value;
-            insertions.entry(node.span.start()).or_insert(Vec::new())
+            let v = &node.origin.value;
+            insertions.entry(node.origin.span.start()).or_insert(Vec::new())
                 .push(v.kind().color_string());
-            insertions.entry(node.span.end()).or_insert(Vec::new())
+            insertions.entry(node.origin.span.end()).or_insert(Vec::new())
                 .push(termion::color::Fg(termion::color::Reset).to_string());
         });
 
