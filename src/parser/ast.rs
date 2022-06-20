@@ -1,16 +1,15 @@
-
-use std::fmt::{Debug};
+use std::fmt::{Debug, Display};
 use downcast_rs::{Downcast, impl_downcast};
 use lalrpop_util::ErrorRecovery;
 use lalrpop_util::lexer::Token;
-use termion::color::{Cyan, Fg, Green, Magenta, Yellow};
-use crate::builtin::entity::Type;
-use crate::completer::parse_tree::PTNode;
+use termion::color::{Bg, Cyan, Fg, Green, LightGreen, LightYellow, Magenta, Red, Yellow};
+use crate::annotator::parse_tree::PTNode;
+use crate::builtin::Value;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Span {
     start: usize,
-    end: usize
+    end: usize,
 }
 
 impl Span {
@@ -55,7 +54,6 @@ impl PartialEq for ASTNode {
 impl Eq for ASTNode {}
 
 impl ASTNode {
-
     pub fn new_simple<T: ASTValue>(l: usize, r: usize, value: T, children: Vec<ASTNode>) -> Self {
         return Self::new(Span::new(l, r), Box::new(value), children);
     }
@@ -69,14 +67,11 @@ impl ASTNode {
         }
         for child in self.children.iter() {
             let v = child.find_child_with_kind(kind);
-            if v.is_some() { return v;}
+            if v.is_some() { return v; }
         }
         return None;
     }
-
-
 }
-
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -115,17 +110,27 @@ pub enum ASTKind {
     CommandName,
     CommandArguments,
 
-    Error
-
+    Error,
 }
+
+impl Display for ASTKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 
 impl ASTKind {
     // returns unique color for each kind
-    pub fn color(&self, buf: &mut String)  {
+    pub fn color(&self, buf: &mut String) {
         match self {
-            ASTKind::Dollar => buf.push_str(&Fg(Cyan).to_string()),
-            ASTKind::OpenParen => buf.push_str(&Fg(termion::color::LightMagenta).to_string()),
-            ASTKind::CloseParen => buf.push_str(&Fg(termion::color::Blue).to_string()),
+            ASTKind::Dollar => buf.push_str(&Fg(Yellow).to_string()),
+            ASTKind::Pipe => buf.push_str(&Fg(Cyan).to_string()),
+            ASTKind::Ampersand => buf.push_str(&Fg(Cyan).to_string()),
+            ASTKind::SemiColon => buf.push_str(&Fg(Cyan).to_string()),
+            ASTKind::PropertyName => buf.push_str(&Fg(LightYellow).to_string()),
+            ASTKind::CommandName => buf.push_str(&Fg(LightGreen).to_string()),
+            ASTKind::Error => buf.push_str(&Bg(Red).to_string()),
             _ => {}
         }
     }
@@ -136,7 +141,6 @@ impl ASTKind {
 
         result
     }
-
 }
 
 
@@ -150,7 +154,7 @@ impl<T> Boxed for T {
     }
 }
 
-pub trait ASTValue : Downcast + Debug{
+pub trait ASTValue: Downcast + Debug {
     fn kind(&self) -> ASTKind;
 }
 
@@ -177,7 +181,6 @@ macro_rules! simple_token {
 }
 
 
-
 simple_token!(Ampersand, ASTKind::Ampersand);
 simple_token!(OpenParen, ASTKind::OpenParen);
 simple_token!(CloseParen, ASTKind::CloseParen);
@@ -202,17 +205,9 @@ simple_token!(Function, ASTKind::Function);
 simple_token!(CommandLine, ASTKind::CommandLine);
 simple_token!(Piped, ASTKind::Piped);
 simple_token!(Sequenced, ASTKind::Sequenced);
-
-#[derive(Debug)]
-pub struct CallChain {
-
-}
+simple_token!(CallChain, ASTKind::CallChain);
 
 impl CallChain {
-    pub fn new() -> Self {
-        Self {}
-    }
-
     pub fn get_left_hand<'a>(&self, node: &'a PTNode<'a>) -> Option<&'a PTNode<'a>> {
         return node
             .children()
@@ -222,21 +217,59 @@ impl CallChain {
     }
 
     pub fn get_right_hand<'a>(&self, node: &'a PTNode<'a>) -> Option<&'a PTNode<'a>> {
-        return node.find_child_with_kind(ASTKind::PropertyCall)
+        return node.find_child_with_kind(ASTKind::PropertyCall);
     }
 }
 
-impl ASTValue for CallChain {
-    fn kind(&self) -> ASTKind {
-        ASTKind::CallChain
+
+impl PropertyCall {
+    pub fn get_property_name<'a>(&self, node: &'a PTNode<'a>) -> Option<&'a str> {
+        return node.find_child_with_kind(ASTKind::PropertyName).map(|x| x.data);
+    }
+
+    pub fn get_arguments<'a>(&self, node: &'a PTNode<'a>) -> Vec<&'a PTNode<'a>> {
+        let node = node
+            .find_child_with_kind(ASTKind::ParenthesizedArgumentsList);
+
+        if node.is_none() { return vec![]; }
+        let node = node.unwrap();
+
+
+        let result = node
+            .children()
+            .iter()
+            .filter(|x| { matches!(x.kind, ASTKind::StringLiteral | ASTKind::NumberLiteral | ASTKind::Identifier) })
+            .map(|x| *x)
+            .collect();
+
+        result
     }
 }
 
+impl NumberLiteral {
+    pub fn get_value<'a>(&self, node: &'a PTNode<'a>) -> Result<Value, String> {
+        node.data.parse::<f64>()
+            .map_err(|e| e.to_string())
+            .map(|x| Value::Number(x))
+    }
+}
+
+impl StringLiteral {
+    pub fn get_value<'a>(&self, node: &'a PTNode<'a>) -> Value {
+        return Value::String((&node.data[1..node.data.len() - 1]).to_string());
+    }
+}
+
+impl Identifier {
+    pub fn get_value<'a>(&self, node: &'a PTNode<'a>) -> Value {
+        return Value::String(node.data.to_string());
+    }
+}
 
 #[derive(Debug)]
 pub struct ASTError {
     pub expected: ASTKind,
-    pub error: ErrorRecovery<usize, ASTKind, (usize, usize)>
+    pub error: ErrorRecovery<usize, ASTKind, (usize, usize)>,
 }
 
 impl ASTError {

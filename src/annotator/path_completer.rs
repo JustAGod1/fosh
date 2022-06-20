@@ -3,15 +3,15 @@ use std::cell::{RefCell};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::sync::atomic::AtomicBool;
-use crate::completer::Completer;
-use crate::completer::parse_tree::PTNode;
+use crate::annotator::{Annotator, AnnotatorContext};
+use crate::annotator::parse_tree::PTNode;
 
-pub struct PathCompleter {
+pub struct PathAnnotator {
     names: Arc<Mutex<Vec<String>>>,
 }
 
-impl Completer for PathCompleter {
-    fn complete<'a>(&self, node: &'a PTNode<'a>) -> Vec<String> {
+impl Annotator for PathAnnotator {
+    fn annotate<'a>(&self, node: &'a PTNode<'a>, context: &mut AnnotatorContext) {
         let names = self.names.lock().unwrap();
         let mut result = Vec::new();
 
@@ -23,11 +23,13 @@ impl Completer for PathCompleter {
             }
         }
 
-        result
+        for x in result {
+            context.sink.completions.push(x)
+        }
     }
 }
 
-impl PathCompleter {
+impl PathAnnotator {
     pub fn new() -> Self {
         let r = Self {
             names: Default::default(),

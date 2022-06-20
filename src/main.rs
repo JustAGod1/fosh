@@ -1,9 +1,11 @@
 #![allow(unused_imports)]
 
+extern crate core;
+
 mod tui;
 mod parser;
-mod completer;
 mod builtin;
+mod annotator;
 
 use std::collections::HashMap;
 use nix::unistd;
@@ -12,6 +14,7 @@ use std::io::{stdin, stdout, Write};
 use termion::event::Key;
 use termion::input::{TermRead};
 use termion::raw::IntoRawMode;
+use crate::builtin::annotator::EntityAnnotator;
 use crate::tui::TUI;
 
 fn set_unique_pid() -> nix::Result<()> {
@@ -28,8 +31,11 @@ fn set_unique_pid() -> nix::Result<()> {
 fn main() {
     set_unique_pid().unwrap();
 
-    TUI::new("$ ".to_string()).run().unwrap();
+    let entities = builtin::EntitiesManager::new();
+    let mut tui = TUI::new("$ ".to_string());
 
+    tui.register_annotator(EntityAnnotator::new(&entities));
 
+    tui.run().unwrap();
 }
 

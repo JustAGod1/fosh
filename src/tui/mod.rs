@@ -1,3 +1,5 @@
+pub mod settings;
+
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;
@@ -5,15 +7,18 @@ use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::IntoRawMode;
 use crate::{parser};
-use crate::completer::CompleterManager;
-use crate::completer::parse_tree::ParseTree;
+use crate::annotator::{AnnotationsSink, Annotator, AnnotatorsManager};
+use crate::annotator::parse_tree::{ParseTree, PTNode};
+use crate::builtin::annotator::EntityAnnotator;
 use crate::parser::ast::ASTNode;
+use crate::tui::settings::TUISettings;
 
-pub struct TUI {
+pub struct TUI<'a> {
     prompt: String,
     command: String,
-    completer: CompleterManager,
+    annotators: AnnotatorsManager<'a>,
     cursor_pos: usize,
+    settings: TUISettings,
 }
 
 
@@ -21,14 +26,23 @@ macro_rules! csi {
     ($( $l:expr ),*) => { concat!("\x1B[", $( $l ),*) };
 }
 
-impl TUI {
+impl <'a>TUI<'a> {
     pub fn new(prompt: String) -> Self {
-        Self {
+
+
+        let mut result = Self {
             prompt,
             command: String::new(),
-            completer: CompleterManager::new(),
+            annotators: AnnotatorsManager::new(),
             cursor_pos: 0,
-        }
+            settings: TUISettings::new(),
+        };
+
+        result
+    }
+
+    pub fn register_annotator<T : 'a + Annotator>(&mut self, annotator: T) {
+        self.annotators.register_annotator(Box::new(annotator));
     }
 
     pub fn run(&mut self) -> Result<(), io::Error> {
@@ -72,22 +86,19 @@ impl TUI {
     }
 
     fn update_data(&self, stdout: &mut std::io::Stdout) {
-        let ast = self.parse_command();
+        let ast = self.parse_command().unwrap();
 
-        let (highlighted, completions) = match ast {
-            Some(ast) => {
-                (self.highlight_command(&ast), self.find_completions(&ast))
-            }
-            None => {
-                (self.command.clone(), Vec::new())
-            }
-        };
+        let insight = self.cursor_insight(&ast);
+        let highlighted = self.highlight_command(&ast);
+
         let mut shift = 0;
 
         write!(stdout, "\r{}", csi!("0J")).unwrap();
-        for x in completions {
-            shift += 1;
-            write!(stdout, "\n\r{}", x).unwrap();
+        if let Some(insight) = insight {
+            for x in insight.completions() {
+                shift += 1;
+                write!(stdout, "\n\r{}", x).unwrap();
+            }
         }
         if shift > 0 {
             write!(stdout, "{}", termion::cursor::Up(shift)).unwrap();
@@ -105,27 +116,45 @@ impl TUI {
         return Some(tree);
     }
 
-    fn find_completions<'a>(&self, tree: &'a ParseTree<'a>) -> Vec<String> {
+    fn cursor_insight(&self, tree: &'a ParseTree<'a>) -> Option<AnnotationsSink> {
         let tree = tree.root();
 
         if let Some(n) = tree.find_leaf_on_pos(self.cursor_pos) {
-            self.completer.complete(&n)
+            let mut sink = AnnotationsSink::new();
+            self.annotators.annotate(n, &mut sink);
+            Some(sink)
         } else {
-            return Vec::new();
+            None
         }
     }
 
+    fn run_annotator_on_node(&self, node: &'a PTNode<'a>) -> AnnotationsSink {
+        let mut sink = AnnotationsSink::new();
+        self.annotators.annotate(node, &mut sink);
 
-    fn highlight_command<'a>(&self, tree: &'a ParseTree<'a>) -> String {
+        sink
+    }
+
+
+    fn highlight_command(&self, tree: &'a ParseTree<'a>) -> String {
         let node = tree.root();
         let command = &self.command;
         let mut insertions = HashMap::<usize, Vec<String>>::new();
         let mut result = String::new();
 
         node.walk(&mut |node| {
+            let mut sink = self.run_annotator_on_node(node);
+
             let v = &node.origin.value;
+
             insertions.entry(node.origin.span.start()).or_insert(Vec::new())
                 .push(v.kind().color_string());
+
+            for x in sink.colors() {
+                insertions.entry(node.origin.span.start()).or_insert(Vec::new())
+                    .push(self.settings.color_scheme().get(x).to_string());
+            }
+
             insertions.entry(node.origin.span.end()).or_insert(Vec::new())
                 .push(termion::color::Fg(termion::color::Reset).to_string());
         });

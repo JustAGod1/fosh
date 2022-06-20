@@ -26,18 +26,9 @@ extern {
 }
 
 pub Delimited : ASTNode = {
-
-    <ll: @L> <v: SequencedWithSemicolon+> <rr: @R> => {
-        ASTNode::new_simple(ll, rr, CommandLine::new(), v.into_iter().flatten().collect())
-    },
-    <Sequenced>
-}
-
-
-SequencedWithSemicolon : Vec<ASTNode> = {
-    <e: Sequenced> <s: Node<SemiColon>> => {
-        vec![e,s]
-    }
+    <ll: @L> <left: Delimited> <pipe: Node<SemiColon>> <right: Sequenced> <rr: @R> =>
+         ASTNode::new_simple(ll, rr, Sequenced::new(), vec![left, pipe, right]),
+     <Sequenced>
 }
 
 Sequenced : ASTNode = {

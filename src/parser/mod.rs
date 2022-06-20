@@ -24,12 +24,12 @@ pub fn parse(data: &str) -> Result<ASTNode, lalrpop_util::ParseError<usize, ASTK
 
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::fmt::format;
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
     use rand::seq::IteratorRandom;
-    use crate::completer::parse_tree::ParseTree;
+    use crate::annotator::parse_tree::ParseTree;
     use crate::parser::ast::{ASTNode, Span};
     use crate::parser::ast::*;
     use crate::parser::cmd::DelimitedParser;
@@ -54,6 +54,9 @@ mod tests {
         ASTKind::Identifier,
     ];
 
+    pub fn build_pt_def(data: &str) -> ParseTree {
+        ParseTree::new(data, build_ast(DelimitedParser::new(), data))
+    }
     fn build_pt<T: ParserAdapter>(adapter: T, data: &str) -> ParseTree {
         ParseTree::new(data, build_ast(adapter, data))
     }
@@ -66,9 +69,12 @@ mod tests {
 
         assert!(ast.is_ok(), "Parsing failed: {}\n Error: {:?}", data, ast);
 
+        println!("{:?}", ast.as_ref()
+            .unwrap());
+
         let pt = ParseTree::new(data, ast.unwrap());
         let error = pt.root().find_child_with_kind_rec(ASTKind::Error);
-        assert!(error.is_none(), "Parsing failed: {}\n Error: {:?}", data, error.unwrap());
+        assert!(error.is_none(), "Parsing failed: {}\n Error: {:?}", data, error.unwrap().origin);
     }
 
     #[test]
