@@ -76,7 +76,6 @@ impl ASTNode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ASTKind {
-    CommandLine,
     Piped,
     Sequenced,
 
@@ -85,6 +84,10 @@ pub enum ASTKind {
     Pipe,
     SemiColon,
     Dollar,
+
+    // Special mode tokens
+    DoubleQuote,
+    Literal,
 
     // Function mode tokens
     OpenParen,
@@ -96,7 +99,6 @@ pub enum ASTKind {
     Dot,
     Comma,
     Identifier,
-    Literal,
 
     // Function mode non-terminals
     Function,
@@ -104,6 +106,7 @@ pub enum ASTKind {
     PropertyCall,
     PropertyName,
     CallChain,
+    BracedCommand,
 
     // Command mode non-terminals
     Command,
@@ -130,6 +133,7 @@ impl ASTKind {
             ASTKind::SemiColon => buf.push_str(&Fg(Cyan).to_string()),
             ASTKind::PropertyName => buf.push_str(&Fg(LightYellow).to_string()),
             ASTKind::CommandName => buf.push_str(&Fg(LightGreen).to_string()),
+            ASTKind::StringLiteral => buf.push_str(&Fg(Green).to_string()),
             ASTKind::Error => buf.push_str(&Bg(Red).to_string()),
             _ => {}
         }
@@ -188,7 +192,6 @@ simple_token!(Literal, ASTKind::Literal);
 simple_token!(OpenBrace, ASTKind::OpenBrace);
 simple_token!(CloseBrace, ASTKind::CloseBrace);
 simple_token!(Dot, ASTKind::Dot);
-simple_token!(Comma, ASTKind::Comma);
 simple_token!(SemiColon, ASTKind::SemiColon);
 simple_token!(Dollar, ASTKind::Dollar);
 simple_token!(Pipe, ASTKind::Pipe);
@@ -202,10 +205,10 @@ simple_token!(Command, ASTKind::Command);
 simple_token!(CommandName, ASTKind::CommandName);
 simple_token!(CommandArguments, ASTKind::CommandArguments);
 simple_token!(Function, ASTKind::Function);
-simple_token!(CommandLine, ASTKind::CommandLine);
 simple_token!(Piped, ASTKind::Piped);
 simple_token!(Sequenced, ASTKind::Sequenced);
 simple_token!(CallChain, ASTKind::CallChain);
+simple_token!(BracedCommand, ASTKind::BracedCommand);
 
 impl CallChain {
     pub fn get_left_hand<'a>(&self, node: &'a PTNode<'a>) -> Option<&'a PTNode<'a>> {
@@ -256,7 +259,11 @@ impl NumberLiteral {
 
 impl StringLiteral {
     pub fn get_value<'a>(&self, node: &'a PTNode<'a>) -> Value {
-        return Value::String((&node.data[1..node.data.len() - 1]).to_string());
+        if node.data.ends_with("\"") && node.data.len() > 1 {
+            Value::String((&node.data[1..node.data.len() - 1]).to_string())
+        } else {
+            Value::String((&node.data[1..]).to_string())
+        }
     }
 }
 
@@ -268,13 +275,16 @@ impl Identifier {
 
 #[derive(Debug)]
 pub struct ASTError {
-    pub expected: ASTKind,
-    pub error: ErrorRecovery<usize, ASTKind, (usize, usize)>,
+    pub expected: Box<dyn ASTValue>,
+    pub error: Option<ErrorRecovery<usize, ASTKind, (usize, usize)>>,
 }
 
 impl ASTError {
-    pub fn new(expected: ASTKind, error: ErrorRecovery<usize, ASTKind, (usize, usize)>) -> Self {
-        Self { expected, error }
+    pub fn new<T : ASTValue>(expected: T, error: ErrorRecovery<usize, ASTKind, (usize, usize)>) -> Self {
+        Self { expected: Box::new(expected), error: Some(error) }
+    }
+    pub fn new_artificial<T : ASTValue>(expected: T) -> Self {
+        Self { expected: Box::new(expected), error: None }
     }
 }
 

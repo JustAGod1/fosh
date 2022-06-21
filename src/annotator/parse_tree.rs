@@ -141,7 +141,7 @@ impl<'a> ParseTreeBuilder<'a> {
 
     fn parse_node(&'a self, node: &'a ASTNode, position: usize) -> &'a PTNode<'a> {
         let kind = match node.value.kind() {
-            ASTKind::Error => node.value.downcast_ref::<ASTError>().unwrap().expected,
+            ASTKind::Error => node.value.downcast_ref::<ASTError>().unwrap().expected.kind(),
             _ => node.value.kind()
         };
         let node: &'a mut PTNode = self.arena.alloc(PTNode {

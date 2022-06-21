@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::sync::atomic::AtomicBool;
 use crate::annotator::{Annotator, AnnotatorContext};
 use crate::annotator::parse_tree::PTNode;
+use crate::parser::ast::ASTKind;
 
 pub struct PathAnnotator {
     names: Arc<Mutex<Vec<String>>>,
@@ -12,6 +13,9 @@ pub struct PathAnnotator {
 
 impl Annotator for PathAnnotator {
     fn annotate<'a>(&self, node: &'a PTNode<'a>, context: &mut AnnotatorContext) {
+        if node.kind != ASTKind::CommandName {
+            return;
+        }
         let names = self.names.lock().unwrap();
         let mut result = Vec::new();
 

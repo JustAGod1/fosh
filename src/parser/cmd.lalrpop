@@ -16,12 +16,13 @@ extern {
         ")" => ASTKind::CloseParen,
         "{" => ASTKind::OpenBrace,
         "}" => ASTKind::CloseBrace,
-        "string" => ASTKind::StringLiteral,
         "number" => ASTKind::NumberLiteral,
         "." => ASTKind::Dot,
         "," => ASTKind::Comma,
         "literal" => ASTKind::Literal,
         "identifier" => ASTKind::Identifier,
+        "\"" => ASTKind::DoubleQuote,
+        "error" => ASTKind::Error,
     }
 }
 
@@ -49,7 +50,7 @@ Command : (Command, Vec<ASTNode>) = {
     <name: Node<CommandName>> <args: NodeParent<CommandArguments>> => {
         (Command::new(), vec![name, args])
     },
-    <ll: @L><err: !><rr: @R> => (Command::new(), vec![ASTNode::new_simple(ll, rr, ASTError::new(ASTKind::CommandName, err), vec![])])
+    <ll: @L><err: !><rr: @R> => (Command::new(), vec![ASTNode::new_simple(ll, rr, ASTError::new(CommandName::new(), err), vec![])])
 }
 CommandName : CommandName = {
     <l: Literal> => CommandName::new()
@@ -65,22 +66,22 @@ Delimeter : ASTNode = {
 }
 
 Function : (Function, Vec<ASTNode>) = {
-    <dollar: Node<Dollar>> <chain: CallChain> => (Function::new(), vec![dollar, chain])
+    <dollar: Node<Dollar>> <chain: Value> => (Function::new(), vec![dollar, chain]),
+    <dollar: Node<Dollar>> <ll: @L><err: !><rr: @R> => (Function::new(), vec![dollar, ASTNode::new_simple(ll, rr, ASTError::new(PropertyName::new(), err), vec![])])
 }
 
-CallChain : ASTNode = {
-    <ll: @L> <l: CallChain> <d: Node<Dot>> <call: NodeParent<PropertyCall>> <rr: @R> => {
+pub CallChain : ASTNode = {
+    <ll: @L> <l: Value> <d: Node<Dot>> <call: NodeParent<PropertyCall>> <rr: @R> => {
         ASTNode::new_simple(ll, rr, CallChain::new(), vec![l, d, call])
      },
-     <call: NodeParent<PropertyCall>> => call
+     <NodeParent<PropertyCall>>
 }
 
+pub PropertyCallNode : ASTNode = { <NodeParent<PropertyCall>>}
+
 PropertyCall : (PropertyCall, Vec<ASTNode>) = {
-    <name: Node<PropertyName>> => (PropertyCall::new(), vec![name]),
     <name: Node<PropertyName>> <args: NodeParent<ParenthesizedArgumentsList>> => (PropertyCall::new(), vec![name, args]),
-    <ll: @L><error: !><rr: @R> => (PropertyCall::new(), vec![
-         ASTNode::new_simple(ll, rr, ASTError::new(ASTKind::PropertyName, error), vec![])
-         ]),
+    <name: Node<PropertyName>> => (PropertyCall::new(), vec![name]),
 }
 
 ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
@@ -93,21 +94,36 @@ ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
         (ParenthesizedArgumentsList::new(), result)
     },
 
-    <l: Node<OpenParen>> <args: Value*> <ll: @L><err: !><rr: @R> => {
+    <l: Node<OpenParen>> <args: Value*> <ll: @L>!<rr: @R> => {
         let mut result = Vec::new();
         result.push(l);
         result.extend(args);
-        result.push(ASTNode::new_simple(ll, rr, ASTError::new(ASTKind::CloseParen, err), vec![]));
+        result.push(ASTNode::new_simple(ll, rr, ASTError::new_artificial(CloseParen::new()), vec![]));
 
         (ParenthesizedArgumentsList::new(), result)
     }
 }
 
 
-Value : ASTNode = {
-    <n : Node<StringLiteral>> => n,
+pub Value : ASTNode = {
+    <n : StringLiteral> => n,
     <n : Node<NumberLiteral>> => n,
-    <n : Node<Identifier>> => n
+    <n : BracedCommand> => n,
+    <n : CallChain> => n,
+
+}
+
+BracedCommand : ASTNode = {
+    <ll: @L> <left: Node<OpenBrace>> <delimited: Delimited> <right: Node<CloseBrace>> <rr: @R> => {
+        ASTNode::new_simple(ll, rr, BracedCommand::new(), vec![left, delimited, right])
+    },
+    <ll: @L> <left: Node<OpenBrace>> <delimited: Delimited> <el: @L> <err: !> <er: @R> <rr: @R> => {
+        ASTNode::new_simple(ll, rr, BracedCommand::new(), vec![
+            left,
+            delimited,
+            ASTNode::new_simple(el, er, ASTError::new(CloseBrace::new(), err), vec![])]
+        )
+    },
 }
 
 
@@ -154,8 +170,9 @@ CloseBrace : CloseBrace = {
     "}" => CloseBrace::new(),
 }
 
-StringLiteral : StringLiteral = {
-    "string" => StringLiteral::new(),
+StringLiteral : ASTNode = {
+    <ll: @L> "\"" Literal "\"" <rr: @R> => ASTNode::new_simple(ll, rr, StringLiteral::new(), vec![]),
+    <ll: @L> "\"" Literal <e: !> <rr: @R> => ASTNode::new_simple(ll, rr, ASTError::new(StringLiteral::new(), e), vec![]),
 }
 
 PropertyName : PropertyName = {

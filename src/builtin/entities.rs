@@ -1,7 +1,38 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 use crate::builtin::{Argument, Entity, Type, Value};
 use crate::builtin::contributors::FilesContributor;
+
+pub struct Stub {
+    properties: HashMap<String, Rc<dyn Entity>>
+}
+
+impl Stub {
+    pub fn new() -> Self {
+        Self { properties: HashMap::new() }
+    }
+}
+
+impl Display for Stub {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stub")
+    }
+}
+
+impl Entity for Stub {
+    fn args(&self) -> &[Argument] {
+        return &[];
+    }
+
+    fn get_properties(&self) -> &HashMap<String, Rc<dyn Entity>> {
+        return &self.properties;
+    }
+
+    fn call(&self, _args: &Vec<Value>) -> Rc<dyn Entity> {
+        return Rc::new(Stub::new());
+    }
+}
 
 pub struct Cd {
     pub args: Vec<Argument>,
@@ -23,11 +54,13 @@ impl Cd {
     }
 }
 
-impl Entity for Cd {
-    fn name(&self) -> &str {
-        "cd"
+impl Display for Cd {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Cd")
     }
+}
 
+impl Entity for Cd {
     fn args(&self) -> &[Argument] {
         return &self.args;
     }
@@ -36,7 +69,9 @@ impl Entity for Cd {
         return &self.properties;
     }
 
-    fn call(&self, args: &Vec<Value>) -> Rc<dyn Entity> {
-        todo!()
+
+    fn call(&self, _args: &Vec<Value>) -> Rc<(dyn Entity + 'static)> {
+        Rc::new(Stub::new())
     }
 }
+

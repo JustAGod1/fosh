@@ -57,8 +57,7 @@ pub trait Contributor {
     fn contribute(&self, value: Value) -> Vec<Value>;
 }
 
-pub trait Entity {
-    fn name(&self) -> &str;
+pub trait Entity : Display {
     fn args(&self) -> &[Argument];
     fn get_properties(&self) -> &HashMap<String, Rc<dyn Entity>>;
     fn call(&self, args: &Vec<Value>) -> Rc<dyn Entity>;
@@ -79,11 +78,13 @@ impl GlobalEntity {
 }
 
 
-impl Entity for GlobalEntity {
-    fn name(&self) -> &str {
-        "global"
+impl Display for GlobalEntity {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GlobalEntity")
     }
+}
 
+impl Entity for GlobalEntity {
     fn args(&self) -> &[Argument] {
         return &[];
     }
@@ -92,7 +93,7 @@ impl Entity for GlobalEntity {
         return &self.properties;
     }
 
-    fn call(&self, args: &Vec<Value>) -> Rc<dyn Entity> {
+    fn call(&self, _args: &Vec<Value>) -> Rc<(dyn Entity + 'static)> {
         panic!("Global entity cannot be called");
     }
 }
@@ -132,7 +133,7 @@ impl EntitiesManager {
         let property = properties.get(name);
 
         if property.is_none() {
-            return Err(format!("Property {} not found on {}", name, left_entity.name()));
+            return Err(format!("Property {} not found on {}", name, left_entity));
         }
         let property = property.unwrap();
 

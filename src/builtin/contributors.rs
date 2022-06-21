@@ -17,13 +17,13 @@ impl Contributor for FilesContributor {
 
         let mut result = Vec::new();
 
-        let (suffix, postfix) = match s.rfind('/') {
-            Some(i) => (&s[..i], &s[i + 1..]),
-            None => (".", &s[..]),
+        let (dir, suffix, postfix) = match s.rfind('/') {
+            Some(i) => (&s[..i+1], &s[..i+1], &s[i + 1..]),
+            None => (".", "", &s[..]),
         };
 
 
-        let path = std::fs::read_dir(suffix);
+        let path = std::fs::read_dir(dir);
         if path.is_err() { return result; }
 
         let path = path.unwrap();
@@ -34,9 +34,10 @@ impl Contributor for FilesContributor {
             let name = entry.file_name();
             let name = name.to_str();
             if name.is_none() { continue; }
+            let name = name.unwrap();
 
-            if postfix.starts_with(postfix) {
-                result.push(Value::String(format!("{}/{}", suffix, name.unwrap())));
+            if name.starts_with(&postfix) {
+                result.push(Value::String(format!("{}{}", suffix, name)));
             }
         }
 

@@ -58,8 +58,12 @@ impl<'b> EntityAnnotator<'b> {
         let value = value.unwrap();
 
         let entity = self
-            .get_target_property(node.find_parent_with_kind(ASTKind::PropertyCall).unwrap())
-            .unwrap();
+            .get_target_property(node.find_parent_with_kind(ASTKind::PropertyCall).unwrap());
+
+        if entity.is_none() {
+            return;
+        }
+        let entity = entity.unwrap();
 
         let idx = node.position() - 1;
 
@@ -91,7 +95,7 @@ impl<'b> EntityAnnotator<'b> {
         let name = node.data;
         let properties = left_entity.get_properties();
         if !properties.contains_key(name) {
-            context.sink().add_error(Some(format!("No such property {} on {}", node.data, left_entity.name())));
+            context.sink().add_error(Some(format!("No such property {} on {}", node.data, left_entity)));
         }
 
         for x in properties.keys() {
@@ -126,6 +130,12 @@ pub mod tests {
         let annotations = annotate_with_default("$ ^c");
         assert_eq!(annotations.colors(), &vec![ColorType::Error]);
         assert_eq!(annotations.completions(), &vec!["cd".to_string()]);
+    }
 
+    #[test]
+    fn test_ill_format() {
+        let annotations = annotate_with_default(r#"$ c^d("fk")."#);
+
+        assert_eq!(annotations.colors(), &vec![]);
     }
 }

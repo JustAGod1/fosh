@@ -30,7 +30,7 @@ impl <'a>TUI<'a> {
     pub fn new(prompt: String) -> Self {
 
 
-        let mut result = Self {
+        let result = Self {
             prompt,
             command: String::new(),
             annotators: AnnotatorsManager::new(),
@@ -61,15 +61,18 @@ impl <'a>TUI<'a> {
                 Key::Backspace => {
                     if self.command.len() > 0 {
                         self.command.pop();
+                        self.cursor_pos=self.cursor_pos.checked_sub(1).unwrap_or(0);
                         self.update_data(&mut stdout);
                     }
                 }
                 Key::Char(c) => {
                     if c == '\n' {
+                        self.cursor_pos=0;
                         self.command.clear();
                         self.update_data(&mut stdout);
                         write!(stdout, "\n\r").unwrap();
                     } else {
+                        self.cursor_pos+=1;
                         stdout.write(c.to_string().as_bytes()).unwrap();
                         self.command.push(c);
 
@@ -117,9 +120,14 @@ impl <'a>TUI<'a> {
     }
 
     fn cursor_insight(&self, tree: &'a ParseTree<'a>) -> Option<AnnotationsSink> {
+        let cursor_pos = if self.cursor_pos == self.command.len() {
+            self.cursor_pos.checked_sub(1).unwrap_or(0)
+        } else {
+            self.cursor_pos
+        };
         let tree = tree.root();
 
-        if let Some(n) = tree.find_leaf_on_pos(self.cursor_pos) {
+        if let Some(n) = tree.find_leaf_on_pos(cursor_pos) {
             let mut sink = AnnotationsSink::new();
             self.annotators.annotate(n, &mut sink);
             Some(sink)
@@ -143,7 +151,7 @@ impl <'a>TUI<'a> {
         let mut result = String::new();
 
         node.walk(&mut |node| {
-            let mut sink = self.run_annotator_on_node(node);
+            let sink = self.run_annotator_on_node(node);
 
             let v = &node.origin.value;
 
