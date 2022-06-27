@@ -87,6 +87,9 @@ enum FunctionLevelToken {
     #[token(";")]
     SemiColon,
 
+    #[token("=")]
+    Equals,
+
     #[regex("[ \n\t]+", logos::skip)]
     Whitespace,
 }
@@ -117,6 +120,7 @@ impl Into<ASTKind> for FunctionLevelToken {
             FunctionLevelToken::Pipe => ASTKind::Pipe,
             FunctionLevelToken::SemiColon => ASTKind::SemiColon,
             FunctionLevelToken::DoubleQuote => ASTKind::DoubleQuote,
+            FunctionLevelToken::Equals => ASTKind::Equals,
             FunctionLevelToken::Whitespace => panic!("Whitespace should not be in the function level tokenizer"),
         }
     }
@@ -131,9 +135,9 @@ impl Into<ASTKind> for TopLevelToken {
             TopLevelToken::Dollar => ASTKind::Dollar,
             TopLevelToken::Error => ASTKind::Error,
             TopLevelToken::Literal => ASTKind::Literal,
-            TopLevelToken::Whitespace => panic!("Whitespace should not be in the top level tokenizer"),
             TopLevelToken::RightBrace => ASTKind::CloseBrace,
             TopLevelToken::DoubleQuote => ASTKind::DoubleQuote,
+            TopLevelToken::Whitespace => panic!("Whitespace should not be in the top level tokenizer"),
         }
     }
 }

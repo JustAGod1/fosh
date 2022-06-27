@@ -75,3 +75,26 @@ impl Entity for Cd {
     }
 }
 
+pub struct StringEntity {
+    value: String
+}
+
+impl StringEntity {
+    pub fn new(value: String) -> Self {
+        Self { value }
+    }
+}
+
+impl Entity for StringEntity {
+    fn args(&self) -> &[Argument] {
+        todo!()
+    }
+
+    fn get_properties(&self) -> &HashMap<String, Rc<dyn Entity>> {
+        todo!()
+    }
+
+    fn call(&self, args: &Vec<Value>) -> Rc<dyn Entity> {
+        todo!()
+    }
+}

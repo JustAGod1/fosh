@@ -16,6 +16,7 @@ extern {
         ")" => ASTKind::CloseParen,
         "{" => ASTKind::OpenBrace,
         "}" => ASTKind::CloseBrace,
+        "=" => ASTKind::Equals,
         "number" => ASTKind::NumberLiteral,
         "." => ASTKind::Dot,
         "," => ASTKind::Comma,
@@ -28,7 +29,7 @@ extern {
 
 pub Delimited : ASTNode = {
     <ll: @L> <left: Delimited> <pipe: Node<SemiColon>> <right: Sequenced> <rr: @R> =>
-         ASTNode::new_simple(ll, rr, Sequenced::new(), vec![left, pipe, right]),
+         ASTNode::new_simple(ll, rr, Delimited::new(), vec![left, pipe, right]),
      <Sequenced>
 }
 
@@ -61,25 +62,22 @@ CommandArguments : (CommandArguments, Vec<ASTNode>) = {
     }
 }
 
-Delimeter : ASTNode = {
-    <Node<SemiColon>>, <Node<Pipe>>, <Node<Ampersand>>
-}
-
 Function : (Function, Vec<ASTNode>) = {
-    <dollar: Node<Dollar>> <chain: Value> => (Function::new(), vec![dollar, chain]),
-    <dollar: Node<Dollar>> <ll: @L><err: !><rr: @R> => (Function::new(), vec![dollar, ASTNode::new_simple(ll, rr, ASTError::new(PropertyName::new(), err), vec![])])
+    <dollar: Node<Dollar>> <value: ValueOrError> => (Function::new(), vec![dollar, value]),
+    <dollar: Node<Dollar>> <value: NodeParent<Assignation>> => (Function::new(), vec![dollar, value]),
 }
 
-pub CallChain : ASTNode = {
-    <ll: @L> <l: Value> <d: Node<Dot>> <call: NodeParent<PropertyCall>> <rr: @R> => {
-        ASTNode::new_simple(ll, rr, CallChain::new(), vec![l, d, call])
-     },
-     <NodeParent<PropertyCall>>
+Assignation : (Assignation, Vec<ASTNode>) = {
+    <id: Node<VariableName>> <eq: Node<Equals>> <v: ValueOrError> =>
+        (Assignation::new(), vec![id, eq, v]),
 }
 
-pub PropertyCallNode : ASTNode = { <NodeParent<PropertyCall>>}
+pub PropertyCallNode : ASTNode = { <NodeParent<PropertyCall>> }
 
 PropertyCall : (PropertyCall, Vec<ASTNode>) = {
+    <value: Value> <dot: Node<Dot>> <name: Node<PropertyName>> <args: NodeParent<ParenthesizedArgumentsList>>
+    => (PropertyCall::new(), vec![value, dot, name, args]),
+    <value: Value> <dot: Node<Dot>> <name: Node<PropertyName>> => (PropertyCall::new(), vec![value, dot, name]),
     <name: Node<PropertyName>> <args: NodeParent<ParenthesizedArgumentsList>> => (PropertyCall::new(), vec![name, args]),
     <name: Node<PropertyName>> => (PropertyCall::new(), vec![name]),
 }
@@ -94,11 +92,11 @@ ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
         (ParenthesizedArgumentsList::new(), result)
     },
 
-    <l: Node<OpenParen>> <args: Value*> <ll: @L>!<rr: @R> => {
+    <l: Node<OpenParen>> <args: Value*> <ll: @L><err: !><rr: @R> => {
         let mut result = Vec::new();
         result.push(l);
         result.extend(args);
-        result.push(ASTNode::new_simple(ll, rr, ASTError::new_artificial(CloseParen::new()), vec![]));
+        result.push(ASTNode::new_simple(ll, rr, ASTError::new(CloseParen::new(), err), vec![]));
 
         (ParenthesizedArgumentsList::new(), result)
     }
@@ -109,18 +107,23 @@ pub Value : ASTNode = {
     <n : StringLiteral> => n,
     <n : Node<NumberLiteral>> => n,
     <n : BracedCommand> => n,
-    <n : CallChain> => n,
+    <n : PropertyCall> => n,
+}
 
+#[inline]
+ValueOrError : ASTNode = {
+    <Value>,
+    <ll: @L> <err: !> <rr: @R> => ASTNode::new_simple(ll, rr, ASTError::new(PropertyCall::new(), err), vec![])
 }
 
 BracedCommand : ASTNode = {
-    <ll: @L> <left: Node<OpenBrace>> <delimited: Delimited> <right: Node<CloseBrace>> <rr: @R> => {
-        ASTNode::new_simple(ll, rr, BracedCommand::new(), vec![left, delimited, right])
+    <ll: @L> <left: Node<OpenBrace>> <function: Function> <right: Node<CloseBrace>> <rr: @R> => {
+        ASTNode::new_simple(ll, rr, BracedCommand::new(), vec![left, function, right])
     },
-    <ll: @L> <left: Node<OpenBrace>> <delimited: Delimited> <el: @L> <err: !> <er: @R> <rr: @R> => {
+    <ll: @L> <left: Node<OpenBrace>> <function: Function> <el: @L> <err: !> <er: @R> <rr: @R> => {
         ASTNode::new_simple(ll, rr, BracedCommand::new(), vec![
             left,
-            delimited,
+            function,
             ASTNode::new_simple(el, er, ASTError::new(CloseBrace::new(), err), vec![])]
         )
     },
@@ -191,3 +194,10 @@ Literal : Literal = {
     "literal" => Literal::new(),
 }
 
+Equals : Equals = {
+    "=" => Equals::new()
+}
+
+VariableName : VariableName = {
+    Identifier => VariableName::new()
+}

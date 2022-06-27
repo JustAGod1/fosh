@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::annotator::{Annotator, AnnotatorContext};
 use crate::annotator::parse_tree::PTNode;
 use crate::builtin::{EntitiesManager, Entity, Value};
-use crate::parser::ast::{ASTKind, CallChain, Identifier, NumberLiteral, ParenthesizedArgumentsList, PropertyCall, StringLiteral};
+use crate::parser::ast::{ASTKind, Identifier, NumberLiteral, ParenthesizedArgumentsList, PropertyCall, StringLiteral};
 
 pub struct EntityAnnotator<'b> {
     entities: &'b EntitiesManager,
@@ -135,6 +135,13 @@ pub mod tests {
     #[test]
     fn test_ill_format() {
         let annotations = annotate_with_default(r#"$ c^d("fk")."#);
+
+        assert_eq!(annotations.colors(), &vec![]);
+    }
+
+    #[test]
+    fn test_error_complete() {
+        let annotations = annotate_with_default(r#"$^"#);
 
         assert_eq!(annotations.colors(), &vec![]);
     }

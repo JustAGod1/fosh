@@ -35,7 +35,6 @@ macro_rules! impl_adapter {
 
 impl_adapter!(DelimitedParser);
 impl_adapter!(PropertyCallNodeParser);
-impl_adapter!(CallChainParser);
 impl_adapter!(ValueParser);
 
 
@@ -57,7 +56,6 @@ pub mod tests {
     use crate::annotator::parse_tree::ParseTree;
     use crate::parser::ast::{ASTNode, Span};
     use crate::parser::ast::*;
-    use crate::parser::ast::ASTKind::PropertyCall;
     use crate::parser::cmd::DelimitedParser;
     use crate::parser::{ParserAdapter, PropertyCallNodeParser};
     use crate::parser::tokenizer::tests::tokenize;
@@ -180,11 +178,11 @@ pub mod tests {
     fn test_leftmost_recursion() {
         let pt = build_pt(DelimitedParser::new(), "$kek.lol.arbidol");
 
-        let node = pt.root().find_child_with_kind_rec(ASTKind::CallChain).unwrap();
-        let chain : &CallChain = node.value();
+        let node = pt.root().find_child_with_kind_rec(ASTKind::PropertyCall).unwrap();
+        let call: &PropertyCall = node.value();
 
-        assert_eq!(chain.get_left_hand(node).unwrap().text(), "kek.lol");
-        assert_eq!(chain.get_right_hand(node).unwrap().text(), "arbidol");
+        assert_eq!(call.left_hand(node).unwrap().text(), "kek.lol");
+        assert_eq!(call.get_property_name(node).unwrap(), "arbidol");
 
     }
 
@@ -316,6 +314,17 @@ pub mod tests {
 
         assert_parsed(r#"${lol}.kek()"#);
         assert_parsed(r#"${lol}.kek() ; lol"#);
+    }
+
+    #[test]
+    fn test_assignation() {
+        assert_parsed(r#"$foo = 5"#);
+        assert_parsed(r#"$foo = "kek""#);
+        assert_parsed(r#"$foo = 5.0"#);
+        assert_parsed(r#"$foo = {lol}"#);
+        assert_parsed(r#"$foo = {lol}.kek()"#);
+        assert_parsed(r#"$foo = {lol}.kek("fd")"#);
+        assert_parsed(r#"$foo = {lol}.kek("fd" "lol")"#);
     }
 
     #[test]

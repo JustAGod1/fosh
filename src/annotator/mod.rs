@@ -112,7 +112,11 @@ pub mod tests {
         let pt = pt.root();
 
         let mut sink = AnnotationsSink::new();
-        let node = pt.find_leaf_on_pos(s.find("^").unwrap()).unwrap();
+        let node = pt.find_leaf_on_pos(s.find("^").unwrap());
+        if node.is_none() {
+            return sink;
+        }
+        let node = node.unwrap();
         manager.annotate(node, &mut sink);
 
         sink
