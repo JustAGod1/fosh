@@ -53,7 +53,7 @@ pub mod tests {
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
     use rand::seq::IteratorRandom;
-    use crate::annotator::parse_tree::ParseTree;
+    use crate::builtin::engine::parse_tree::ParseTree;
     use crate::parser::ast::{ASTNode, Span};
     use crate::parser::ast::*;
     use crate::parser::cmd::DelimitedParser;

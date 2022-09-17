@@ -4,8 +4,9 @@ use downcast_rs::{Downcast, impl_downcast};
 use lalrpop_util::ErrorRecovery;
 use lalrpop_util::lexer::Token;
 use termion::color::{Bg, Cyan, Fg, Green, LightGreen, LightMagenta, LightYellow, Magenta, Red, Yellow};
-use crate::annotator::parse_tree::PTNode;
-use crate::builtin::{EntitiesManager, Entity, Value};
+use crate::builtin::engine::entities::EntitiesManager;
+use crate::builtin::engine::parse_tree::PTNode;
+use crate::builtin::engine::Value;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Span {

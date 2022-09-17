@@ -1,10 +1,7 @@
 use std::fmt::Display;
-use crate::annotator::parse_tree::PTNode;
-use crate::annotator::path_completer::PathAnnotator;
+use crate::builtin::annotator::PathAnnotator;
+use crate::builtin::engine::parse_tree::PTNode;
 use crate::tui::settings::ColorType;
-
-pub mod parse_tree;
-pub mod path_completer;
 
 pub struct AnnotatorsManager<'a> {
     annotators: Vec<Box<dyn Annotator + 'a>>,
@@ -98,7 +95,7 @@ impl <'a>AnnotatorContext<'a> {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::annotator::{AnnotationsSink, Annotator, AnnotatorsManager};
+    use crate::builtin::engine::annotator::{AnnotationsSink, Annotator, AnnotatorsManager};
     use crate::parser::tests::build_pt_def;
 
     pub fn get_annotations<'a>(s: &str, annotators: Vec<Box<dyn Annotator + 'a>>) -> AnnotationsSink {

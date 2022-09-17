@@ -192,6 +192,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75d8078f03daf673d8bd34a1ef48c680ea4a895204882ce5f0ccfb2487b2bd29"
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2dd04ddaf88237dc3b8d8f9a3c1004b506b54b3313403944054d23c0870c521"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51887d4adc7b564537b15adcfb307936f8075dfcd5f00dde9a9f1d29383682bc"
+dependencies = [
+ "cfg-if 1.0.0",
+ "once_cell",
+]
+
+[[package]]
 name = "crunchy"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -290,6 +310,7 @@ dependencies = [
  "lalrpop-util",
  "logos",
  "nix",
+ "pipe",
  "rand",
  "regex",
  "termion",
@@ -425,9 +446,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.126"
+version = "0.2.132"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "349d5a591cd28b49e1d1037471617a32ddcda5731b99419008085f72d5a53836"
+checksum = "8371e4e5341c3a96db127eb2465ac681ced4c433e01dd0e938adbef26ba93ba5"
 
 [[package]]
 name = "libloading"
@@ -504,14 +525,16 @@ checksum = "e4a24736216ec316047a1fc4252e27dabb04218aa4a3f37c6e7ddbf1f9782b54"
 
 [[package]]
 name = "nix"
-version = "0.24.1"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f17df307904acd05aa8e32e97bb20f2a0df1728bbc2d771ae8f9a90463441e9"
+checksum = "e322c04a9e3440c327fca7b6c8a63e6890a32fa2ad689db972425f07e0d22abb"
 dependencies = [
+ "autocfg",
  "bitflags",
  "cfg-if 1.0.0",
  "libc",
  "memoffset",
+ "pin-utils",
 ]
 
 [[package]]
@@ -613,6 +636,21 @@ name = "pico-args"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db8bcd96cb740d03149cbad5518db9fd87126a10ab519c011893b1754134c468"
+
+[[package]]
+name = "pin-utils"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pipe"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c7b8f27da217eb966df4c58d4159ea939431950ca03cf782c22bd7c5c1d8d75"
+dependencies = [
+ "crossbeam-channel",
+]
 
 [[package]]
 name = "pkg-config"

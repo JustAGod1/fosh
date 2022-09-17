@@ -1,8 +1,10 @@
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ops::Deref;
 use typed_arena::Arena;
-use crate::annotator::{AnnotationsSink, Annotator};
 use crate::parser::ast::{ASTKind, ASTNode, ASTValue, ASTError};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PTNodeId(usize);
 
 pub struct PTNode<'a> {
     pub data: &'a str,
@@ -10,7 +12,8 @@ pub struct PTNode<'a> {
     pub origin: &'a ASTNode,
     children: RefCell<Vec<&'a PTNode<'a>>>,
     parent: Cell<Option<&'a PTNode<'a>>>,
-    position: usize
+    position: usize,
+    id: PTNodeId,
 }
 
 impl<'a> PTNode<'a> {
@@ -18,6 +21,10 @@ impl<'a> PTNode<'a> {
         return self.data;
     }
 
+
+    pub fn id(&self) -> PTNodeId {
+        self.id
+    }
 
     pub fn find_leaf_on_pos(&'a self, pos: usize) -> Option<&'a PTNode<'a>> {
         if self.is_leaf() {
@@ -135,11 +142,12 @@ impl<'a> ParseTreeBuilder<'a> {
         }
     }
     fn parse_ast(&'a self, ast: &'a ASTNode) -> &'a PTNode<'a> {
-        return self.parse_node(ast, 0);
+        return self.parse_node(ast, 0, 0).0;
     }
 
 
-    fn parse_node(&'a self, node: &'a ASTNode, position: usize) -> &'a PTNode<'a> {
+    fn parse_node(&'a self, node: &'a ASTNode, position: usize, id: usize) -> (&'a PTNode<'a>, usize) {
+        let mut id = id;
         let kind = match node.value.kind() {
             ASTKind::Error => node.value.downcast_ref::<ASTError>().unwrap().expected.kind(),
             _ => node.value.kind()
@@ -150,18 +158,20 @@ impl<'a> ParseTreeBuilder<'a> {
             origin: node,
             parent: Default::default(),
             children: Default::default(),
-            position
+            position,
+            id: PTNodeId(id)
         });
 
         let mut pos = 0usize;
         for child in &node.origin.children {
-            let child_node = self.parse_node(child, pos);
+            let (child_node, new_id) = self.parse_node(child, pos, id + 1);
+            id = new_id + 1;
             child_node.parent.set(Some(node));
             node.children.borrow_mut().push(child_node);
             pos += 1;
         }
 
-        node
+        (node, id)
     }
 
 }

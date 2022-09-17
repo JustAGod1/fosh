@@ -7,9 +7,9 @@ use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::IntoRawMode;
 use crate::{parser};
-use crate::annotator::{AnnotationsSink, Annotator, AnnotatorsManager};
-use crate::annotator::parse_tree::{ParseTree, PTNode};
 use crate::builtin::annotator::EntityAnnotator;
+use crate::builtin::engine::annotator::{AnnotationsSink, Annotator, AnnotatorsManager};
+use crate::builtin::engine::parse_tree::{ParseTree, PTNode};
 use crate::parser::ast::ASTNode;
 use crate::tui::settings::TUISettings;
 
