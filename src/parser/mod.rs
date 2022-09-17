@@ -119,6 +119,7 @@ pub mod tests {
     fn assert_parsed(data: &str) {
         let ast = DelimitedParser::new().parse(Tokenizer::new(data));
 
+        println!("{:?}", ast);
         validate_ast(data, ast);
     }
 
@@ -335,6 +336,11 @@ pub mod tests {
 
         let node = pt.root().find_child_with_kind_rec(ASTKind::StringLiteral).unwrap();
         assert_eq!(node.data, r#""kek""#)
+    }
+
+    #[test]
+    fn just_braced_command() {
+        assert_parsed(r#"${lol}"#);
     }
 
     #[test]

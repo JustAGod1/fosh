@@ -14,7 +14,7 @@ use std::io::{stdin, stdout, Write};
 use termion::event::Key;
 use termion::input::{TermRead};
 use termion::raw::IntoRawMode;
-use crate::builtin::annotator::EntityAnnotator;
+use crate::builtin::annotator::PathAnnotator;
 use crate::builtin::engine::entities::EntitiesManager;
 use crate::tui::TUI;
 
@@ -35,7 +35,7 @@ fn main() {
     let entities = EntitiesManager::new();
     let mut tui = TUI::new("$ ".to_string());
 
-    tui.register_annotator(EntityAnnotator::new(&entities));
+    tui.register_annotator(PathAnnotator::new());
 
     tui.run().unwrap();
 }

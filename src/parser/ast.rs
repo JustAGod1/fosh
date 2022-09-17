@@ -321,33 +321,32 @@ impl Typed for Function {
             .map(|x| x.infer_value(pt.children()[1], entities));
 
         if v.is_none() { return None;}
-        return v.unwrap();
+        return None;
     }
 }
 impl Typed for PropertyCall {
     fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
-        let v = pt.value::<PropertyCall>();
-
-        match v.left_hand(pt) {
-            None => entities.global().clone(),
-            Some(left_hand) => {
-                let typed = downcast_to_typed(left_hand);
-                if typed.is_none() { return None; }
-                let typed = typed.unwrap();
-                
-                let left_value = typed.infer_value(left_hand, entities);
-                if left_value.is_none() { return None; }
-                let left_value = left_value.unwrap();
-                
-                
-            }
-        }
-        
         return None;
         
     }
 }
-impl Typed for BracedCommand {}
-impl Typed for Delimited {}
-impl Typed for Sequenced {}
-impl Typed for Piped {}
+impl Typed for BracedCommand {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+        todo!()
+    }
+}
+impl Typed for Delimited {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+        todo!()
+    }
+}
+impl Typed for Sequenced {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+        todo!()
+    }
+}
+impl Typed for Piped {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+        todo!()
+    }
+}

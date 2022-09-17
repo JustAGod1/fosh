@@ -1,6 +1,7 @@
-use crate::builtin::engine::{Contributor, Value};
+use crate::builtin::engine::contributors::Contributor;
+use crate::builtin::engine::Value;
 
-pub(super) struct FilesContributor {}
+pub struct FilesContributor {}
 
 impl FilesContributor {
     pub fn new() -> Self {

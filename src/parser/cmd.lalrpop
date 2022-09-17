@@ -107,7 +107,7 @@ pub Value : ASTNode = {
     <n : StringLiteral> => n,
     <n : Node<NumberLiteral>> => n,
     <n : BracedCommand> => n,
-    <n : PropertyCall> => n,
+    <n : NodeParent<PropertyCall>> => n,
 }
 
 #[inline]
@@ -117,10 +117,10 @@ ValueOrError : ASTNode = {
 }
 
 BracedCommand : ASTNode = {
-    <ll: @L> <left: Node<OpenBrace>> <function: Function> <right: Node<CloseBrace>> <rr: @R> => {
+    <ll: @L> <left: Node<OpenBrace>> <function: Delimited> <right: Node<CloseBrace>> <rr: @R> => {
         ASTNode::new_simple(ll, rr, BracedCommand::new(), vec![left, function, right])
     },
-    <ll: @L> <left: Node<OpenBrace>> <function: Function> <el: @L> <err: !> <er: @R> <rr: @R> => {
+    <ll: @L> <left: Node<OpenBrace>> <function: Delimited> <el: @L> <err: !> <er: @R> <rr: @R> => {
         ASTNode::new_simple(ll, rr, BracedCommand::new(), vec![
             left,
             function,

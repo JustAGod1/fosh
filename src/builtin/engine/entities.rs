@@ -1,3 +1,4 @@
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Write};
@@ -41,7 +42,7 @@ impl PseudoExecution {
 
 impl Execution for PseudoExecution {
     fn std_input(&mut self) -> &mut dyn Write {
-        return &mut self.std_in;
+        return &mut self.std_in_in;
     }
 
     fn std_out(&mut self) -> &mut dyn Read {
@@ -78,18 +79,23 @@ impl EntityExecutionError {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct Entity<'a> {
     name: String,
 
-    arguments: Vec<Argument>,
+    arguments: Vec<Argument<'a>>,
     implicits: HashMap<Type, Box<dyn Fn(&Entity) -> Value<'static>>>,
-    callee: Option<Box<dyn Fn(&mut Entity, &Vec<Entity>) -> Result<Entity<'a>, EntityExecutionError>>>,
+    callee: Option<Box<dyn Fn(&mut Entity, &Vec<Entity>) -> Result<Entity<'a>, EntityExecutionError> + 'a>>,
     execution_not_piped: Option<Box<dyn Fn(&mut Entity) -> Result<Box<dyn Execution>, EntityExecutionError>>>,
 
     properties: HashMap<String, Entity<'a>>,
 
-    prototype: Option<&'a Entity<'a>>,
+    prototype: Option<&'a RefCell<Entity<'a>>>,
+}
+
+impl Display for Entity<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
 }
 
 pub struct Comms<'a> {
@@ -100,15 +106,15 @@ pub struct Comms<'a> {
 
 impl <'a>Entity<'a> {
     pub fn with_pseudo_execution<F>(mut self, block: F) -> Self
-        where F: Fn(&mut Entity, &Comms) -> Result<(), EntityExecutionError> + 'static {
+        where F: Fn(&mut Entity, &mut Comms) -> Result<(), EntityExecutionError> + 'static {
         self.execution_not_piped = Some(Box::new(move |entity| {
             let mut execution = PseudoExecution::new();
-            let comms = Comms {
+            let mut comms = Comms {
                 std_in: &mut execution.std_in_out,
                 std_out: &mut execution.std_out_in,
                 std_err: &mut execution.std_err_in,
             };
-            block(entity, &comms)?;
+            block(entity, &mut comms)?;
             Ok(Box::new(execution))
         }));
 
@@ -120,24 +126,28 @@ impl <'a>Entity<'a> {
         self
     }
 
-    pub fn with_implicit(mut self, type_: Type, implicit: Box<dyn Fn(&Entity) -> Value>) -> Self {
+    pub fn add_property(&mut self, name: &str, property: Entity<'a>) {
+        self.properties.insert(name.to_string(), property);
+    }
+
+    pub fn with_implicit(mut self, type_: Type, implicit: Box<dyn Fn(&Entity) -> Value<'static>>) -> Self {
         self.implicits.insert(type_, implicit);
         self
     }
 
-    pub fn with_arguments(mut self, arguments: Vec<Argument>) -> Self {
+    pub fn with_arguments(mut self, arguments: Vec<Argument<'a>>) -> Self {
         self.arguments = arguments;
         self
     }
 
     pub fn with_callee<F>(mut self, block: F) -> Self
-        where F: Fn(&mut Entity, &Vec<Entity>) -> Result<Entity<'a>, EntityExecutionError> + 'static {
+        where F: Fn(&mut Entity, &Vec<Entity>) -> Result<Entity<'a>, EntityExecutionError> + 'a {
         self.callee = Some(Box::new(block));
         self
     }
 }
 
-pub fn implicit_type(typ: Type, entity: Option<&Entity>) -> Option<Value> {
+pub fn implicit_type(typ: Type, entity: Option<&Entity>) -> Option<Value<'static>> {
     if entity.is_none() { return None; }
     let entity = entity.unwrap();
 
@@ -148,15 +158,17 @@ pub fn implicit_type(typ: Type, entity: Option<&Entity>) -> Option<Value> {
 }
 
 
-pub struct EntitiesManager {
-    any: Entity<'static>,
-    global: Entity<'static>,
+pub struct EntitiesManager<'a> {
+    pub files_contributor: FilesContributor,
+    any: RefCell<Entity<'a>>,
+    global: RefCell<Entity<'a>>,
 }
 
-impl EntitiesManager {
-    pub fn new() -> EntitiesManager {
+impl <'a>EntitiesManager<'a> {
+    pub fn new() -> EntitiesManager<'a> {
         EntitiesManager {
-            any: Entity {
+            files_contributor: FilesContributor {},
+            any: RefCell::new(Entity {
                 name: "Any".to_string(),
                 arguments: vec![],
                 implicits: HashMap::new(),
@@ -164,8 +176,8 @@ impl EntitiesManager {
                 execution_not_piped: None,
                 properties: HashMap::new(),
                 prototype: None,
-            },
-            global: Entity {
+            }),
+            global: RefCell::new(Entity {
                 name: "Global".to_string(),
                 arguments: vec![],
                 implicits: HashMap::from([]),
@@ -173,11 +185,11 @@ impl EntitiesManager {
                 execution_not_piped: None,
                 properties: HashMap::from([]),
                 prototype: None
-            },
+            }),
         }
     }
 
-    pub fn make_entity(&self, name: String) -> Entity {
+    pub fn make_entity(&'a self, name: String) -> Entity<'a> {
         Entity {
             name,
             arguments: vec![],
@@ -187,6 +199,10 @@ impl EntitiesManager {
             properties: HashMap::new(),
             prototype: Some(&self.any),
         }
+    }
+
+    pub fn global(&'a self) -> RefMut<Entity<'a>> {
+        self.global.borrow_mut()
     }
 }
 

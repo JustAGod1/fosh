@@ -32,9 +32,9 @@ pub trait Annotator {
 }
 
 pub struct AnnotationsSink {
-    completions: Vec<String>,
-    colors: Vec<ColorType>,
-    hints: Vec<String>,
+    pub completions: Vec<String>,
+    pub colors: Vec<ColorType>,
+    pub hints: Vec<String>,
 }
 
 impl AnnotationsSink {
@@ -80,7 +80,7 @@ impl AnnotationsSink {
 
 
 pub struct AnnotatorContext<'a> {
-    sink: &'a mut AnnotationsSink
+    pub sink: &'a mut AnnotationsSink
 }
 
 impl <'a>AnnotatorContext<'a> {

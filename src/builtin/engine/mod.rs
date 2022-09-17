@@ -8,18 +8,18 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::ParseIntError;
 use std::ops::Deref;
 use std::rc::Rc;
+use crate::builtin::engine::contributors::Contributor;
 use crate::builtin::engine::entities::Entity;
 use crate::parser::ast::{ASTKind, Boxed, Identifier, NumberLiteral, PropertyCall, StringLiteral};
 use crate::tui::settings::{ColorType, TUISettings};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     String,
     Number,
     Entity
 }
 
-#[derive(Debug, Clone)]
 pub enum Value<'a> {
     String(String),
     Number(f64),
@@ -31,7 +31,7 @@ impl Display for Value<'_> {
         match self {
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::Number(n) => write!(f, "{}", n),
-            Value::Entity(e) => write!(f, "{:?}", e),
+            Value::Entity(e) => write!(f, "{}", e),
         }
     }
 }
@@ -48,33 +48,31 @@ impl Value<'_> {
 
 }
 
-pub struct Argument {
+#[derive(Clone)]
+pub struct Argument<'a> {
     pub name: String,
     pub ty: Type,
-    pub contributor: Box<dyn Contributor>
+    pub contributor: &'a dyn Contributor
 }
 
-impl Into<Value<'_>> for f64 {
-    fn into(self) -> Value {
+impl Into<Value<'static>> for f64 {
+    fn into(self) -> Value<'static> {
         Value::Number(self)
     }
 }
 
-impl Into<Value<'_>> for String {
-    fn into(self) -> Value {
+impl Into<Value<'static>> for String {
+    fn into(self) -> Value<'static> {
         Value::String(self)
     }
 }
 
 impl <'a>Into<Value<'a>> for Entity<'a> {
-    fn into(self) -> Value {
+    fn into(self) -> Value<'a> {
         Value::Entity(self)
     }
 }
 
 
 
-pub trait Contributor {
-    fn contribute(&self, value: Value) -> Vec<Value>;
-}
 
