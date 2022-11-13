@@ -1,6 +1,7 @@
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ops::Deref;
 use typed_arena::Arena;
+use crate::parser;
 use crate::parser::ast::{ASTKind, ASTNode, ASTValue, ASTError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -176,4 +177,12 @@ impl<'a> ParseTreeBuilder<'a> {
 
 }
 
+pub fn parse_line(line: &str) -> Option<ParseTree> {
+    let ast = parser::parse(line);
+    if ast.is_err() {
+        return None;
+    }
+    let tree = ParseTree::new(line, ast.unwrap());
 
+    return Some(tree);
+}

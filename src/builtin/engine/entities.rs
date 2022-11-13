@@ -1,59 +1,109 @@
-use std::cell::{RefCell, RefMut};
+use std::borrow::Cow;
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{Read, stderr, stdin, stdout, Write};
+use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
+use nix::libc::stat;
 use pipe::{PipeReader, PipeWriter};
 use crate::builtin::contributors::FilesContributor;
 use crate::builtin::engine::{Argument, Type, Value};
 use crate::builtin::engine::parse_tree::PTNodeId;
 
-pub trait Execution {
-    fn std_input(&mut self) -> &mut dyn Write;
-    fn std_out(&mut self) -> &mut dyn Read;
-    fn std_err(&mut self) -> &mut dyn Read;
+pub struct ExecutionConfig {
+    pub std_in: Option<File>,
+    pub std_out: Option<File>,
+    pub std_err: Option<File>,
 }
 
-pub struct PseudoExecution {
-    std_out_in: PipeWriter,
-    std_out_out: PipeReader,
-    std_err_in: PipeWriter,
-    std_err_out: PipeReader,
-    std_in_in: PipeWriter,
-    std_in_out: PipeReader,
-
+pub trait Execution<'a> {
+    fn execute(self, entities: &'a EntitiesManager) -> Result<Entity, EntityExecutionError>;
 }
 
-impl PseudoExecution {
-    pub fn new() -> Self {
-        let (std_out_out, std_out_in) = pipe::pipe();
-        let (std_err_out, std_err_in) = pipe::pipe();
-        let (std_in_out, std_in_in) = pipe::pipe();
+pub struct PseudoExecution<'a> {
+    work: Box<dyn for<'b> FnOnce(&'b EntitiesManager) -> Result<Entity, EntityExecutionError> + 'a>,
+}
+
+pub struct Callee {
+    pub arguments: Vec<Argument>,
+    pub callee: Box<dyn for<'b> Fn(&'b [Entity], ExecutionConfig) -> Result<Box<dyn Execution<'b> + 'b>, EntityExecutionError>>,
+    pub result_prototype: Option<Entity>,
+}
+
+impl Callee {
+    pub fn new<F>(block: F) -> Self
+        where F: for <'b> Fn(&'b [Entity], ExecutionConfig) -> Result<Box<(dyn Execution<'b> + 'b)>, EntityExecutionError> + 'static
+    {
         Self {
-            std_out_in,
-            std_out_out,
-            std_err_in,
-            std_err_out,
-            std_in_in,
-            std_in_out,
+            arguments: vec![],
+            callee: Box::new(block),
+            result_prototype: None,
+        }
+    }
+
+    pub fn new_pseudo_execution<F>(block: F) -> Callee
+        where F: 'static + for<'b> FnOnce(&'b [Entity], &'b EntitiesManager, &mut dyn Read, &mut dyn Write, &mut dyn Write)
+            -> Result<Entity, EntityExecutionError> + Copy
+    {
+        Self {
+            arguments: vec![],
+            callee: Box::new(move |args, mut config| {
+                let execution = PseudoExecution::from(move |entities| {
+                    let mut stdin = stdin();
+                    let mut stdout = stdout();
+                    let mut stderr = stderr();
+                    let mut stderr = config.std_err.as_mut().map(|a| a as &mut dyn Write).unwrap_or_else(|| &mut stderr);
+                    let mut stdout = config.std_out.as_mut().map(|a| a as &mut dyn Write).unwrap_or_else(|| &mut stdout);
+                    let mut stdin = config.std_in.as_mut().map(|a| a as &mut dyn Read).unwrap_or_else(|| &mut stdin);
+
+                    block(args, entities, &mut stdin, &mut stdout, &mut stderr)
+                });
+                Ok(Box::new(execution))
+            }),
+            result_prototype: None,
+        }
+    }
+
+    pub fn with_arguments(mut self, arguments: Vec<Argument>) -> Self {
+        self.arguments = arguments;
+        self
+    }
+
+    pub fn with_result_prototype(mut self, prototype: Entity) -> Self {
+        self.result_prototype = Some(prototype);
+        self
+    }
+}
+
+impl<'a> PseudoExecution<'a> {
+    pub fn from<F>(work: F) -> Self
+        where F: for<'b> FnOnce(&'b EntitiesManager) -> Result<Entity, EntityExecutionError> + 'a, F: 'a
+    {
+        Self {
+            work: Box::new(work)
         }
     }
 }
 
-impl Execution for PseudoExecution {
-    fn std_input(&mut self) -> &mut dyn Write {
-        return &mut self.std_in_in;
-    }
-
-    fn std_out(&mut self) -> &mut dyn Read {
-        &mut self.std_out_out
-    }
-
-    fn std_err(&mut self) -> &mut dyn Read {
-        &mut self.std_err_out
+impl<'b> Execution<'b> for PseudoExecution<'b> {
+    fn execute(self, entities: &EntitiesManager) -> Result<Entity, EntityExecutionError> {
+        (self.work)(entities)
     }
 }
 
+
+impl<'b> Execution<'b> for Child {
+    fn execute(mut self, entities: &EntitiesManager) -> Result<Entity, EntityExecutionError> {
+        let status = self.wait().map_err(|x| x.to_string().into())?;
+        Ok(
+            entities
+                .make_entity(format!("Process exited with status {}", status))
+                .with_property("status", Value::Number(status.code().unwrap_or(-1) as f64).into_entity(entities))
+        )
+    }
+}
 
 pub struct EntityExecutionError {
     general: Option<String>,
@@ -79,20 +129,30 @@ impl EntityExecutionError {
     }
 }
 
-pub struct Entity<'a> {
-    name: String,
-
-    arguments: Vec<Argument<'a>>,
-    implicits: HashMap<Type, Box<dyn Fn(&Entity) -> Value<'static>>>,
-    callee: Option<Box<dyn Fn(&mut Entity, &Vec<Entity>) -> Result<Entity<'a>, EntityExecutionError> + 'a>>,
-    execution_not_piped: Option<Box<dyn Fn(&mut Entity) -> Result<Box<dyn Execution>, EntityExecutionError>>>,
-
-    properties: HashMap<String, Entity<'a>>,
-
-    prototype: Option<&'a RefCell<Entity<'a>>>,
+impl Into<EntityExecutionError> for String {
+    fn into(self) -> EntityExecutionError {
+        EntityExecutionError::new().with_general_error(self)
+    }
 }
 
-impl Display for Entity<'_> {
+impl Into<EntityExecutionError> for &str {
+    fn into(self) -> EntityExecutionError {
+        EntityExecutionError::new().with_general_error(self)
+    }
+}
+
+pub struct Entity {
+    name: String,
+
+    implicits: HashMap<Type, Box<dyn Fn() -> Value + 'static>>,
+    callee: Option<Box<Callee>>,
+
+    properties: HashMap<String, Entity>,
+
+    prototype: Option<&'static RefCell<Entity>>,
+}
+
+impl Display for Entity {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }
@@ -104,105 +164,98 @@ pub struct Comms<'a> {
     pub std_err: &'a mut dyn Write,
 }
 
-impl <'a>Entity<'a> {
-    pub fn with_pseudo_execution<F>(mut self, block: F) -> Self
-        where F: Fn(&mut Entity, &mut Comms) -> Result<(), EntityExecutionError> + 'static {
-        self.execution_not_piped = Some(Box::new(move |entity| {
-            let mut execution = PseudoExecution::new();
-            let mut comms = Comms {
-                std_in: &mut execution.std_in_out,
-                std_out: &mut execution.std_out_in,
-                std_err: &mut execution.std_err_in,
-            };
-            block(entity, &mut comms)?;
-            Ok(Box::new(execution))
-        }));
-
+impl Entity {
+    pub fn with_callee(mut self, callee: Callee) -> Self {
+        self.callee = Some(Box::new(callee));
         self
     }
 
-    pub fn with_property(mut self, name: &str, property: Entity<'a>) -> Self {
+    pub fn with_property(mut self, name: &str, property: Entity) -> Self {
         self.properties.insert(name.to_string(), property);
         self
     }
 
-    pub fn add_property(&mut self, name: &str, property: Entity<'a>) {
+    pub fn add_property(&mut self, name: &str, property: Entity) {
         self.properties.insert(name.to_string(), property);
     }
 
-    pub fn with_implicit(mut self, type_: Type, implicit: Box<dyn Fn(&Entity) -> Value<'static>>) -> Self {
-        self.implicits.insert(type_, implicit);
+    pub fn with_implicit<F, V>(mut self, type_: Type, implicit: F) -> Self
+        where F: Fn() -> V, F: 'static, V: Into<Value>
+    {
+        self.implicits.insert(type_, Box::new(move || implicit().into()));
         self
     }
 
-    pub fn with_arguments(mut self, arguments: Vec<Argument<'a>>) -> Self {
-        self.arguments = arguments;
-        self
+    pub fn name(&self) -> &str {
+        &self.name
     }
-
-    pub fn with_callee<F>(mut self, block: F) -> Self
-        where F: Fn(&mut Entity, &Vec<Entity>) -> Result<Entity<'a>, EntityExecutionError> + 'a {
-        self.callee = Some(Box::new(block));
-        self
+    pub fn implicits(&self) -> &HashMap<Type, Box<dyn Fn() -> Value + 'static>> {
+        &self.implicits
+    }
+    pub fn callee(&self) -> &Option<Box<Callee>> {
+        &self.callee
+    }
+    pub fn properties(&self) -> &HashMap<String, Entity> {
+        &self.properties
+    }
+    pub fn prototype(&self) -> Option<&'static RefCell<Entity>> {
+        self.prototype
     }
 }
 
-pub fn implicit_type(typ: Type, entity: Option<&Entity>) -> Option<Value<'static>> {
+pub fn implicit_type(typ: Type, entity: Option<&Entity>) -> Option<Value> {
     if entity.is_none() { return None; }
     let entity = entity.unwrap();
 
     let implicit = entity.implicits.get(&typ);
     if implicit.is_none() { return None; }
     let implicit = implicit.unwrap();
-    Some(implicit(entity))
+    Some(implicit())
 }
 
 
-pub struct EntitiesManager<'a> {
+pub struct EntitiesManager {
     pub files_contributor: FilesContributor,
-    any: RefCell<Entity<'a>>,
-    global: RefCell<Entity<'a>>,
+    any: RefCell<Entity>,
+    global: RefCell<Entity>,
 }
 
-impl <'a>EntitiesManager<'a> {
-    pub fn new() -> EntitiesManager<'a> {
+impl EntitiesManager {
+    pub fn new() -> EntitiesManager {
         EntitiesManager {
             files_contributor: FilesContributor {},
             any: RefCell::new(Entity {
                 name: "Any".to_string(),
-                arguments: vec![],
                 implicits: HashMap::new(),
                 callee: None,
-                execution_not_piped: None,
                 properties: HashMap::new(),
                 prototype: None,
             }),
             global: RefCell::new(Entity {
                 name: "Global".to_string(),
-                arguments: vec![],
                 implicits: HashMap::from([]),
                 callee: None,
-                execution_not_piped: None,
                 properties: HashMap::from([]),
-                prototype: None
+                prototype: None,
             }),
         }
     }
 
-    pub fn make_entity(&'a self, name: String) -> Entity<'a> {
+    pub fn make_entity(&self, name: String) -> Entity {
         Entity {
             name,
-            arguments: vec![],
             implicits: HashMap::new(),
             callee: None,
-            execution_not_piped: None,
             properties: HashMap::new(),
-            prototype: Some(&self.any),
+            prototype: Some(unsafe { std::mem::transmute(&self.any) }),
         }
     }
 
-    pub fn global(&'a self) -> RefMut<Entity<'a>> {
-        self.global.borrow_mut()
+    pub fn global_mut(&self) -> RefMut<Entity> {
+        unsafe { std::mem::transmute(self.global.borrow_mut()) }
+    }
+    pub fn global(&self) -> Ref<Entity> {
+        unsafe { std::mem::transmute(self.global.borrow()) }
     }
 }
 

@@ -68,6 +68,39 @@ impl PathAnnotator {
     }
 }
 
+pub struct EntitiesAnnotator<'a> {
+    entities: &'a EntitiesManager,
+}
+
+impl <'a>EntitiesAnnotator<'a> {
+    pub fn new(entities: &'a EntitiesManager) -> Self {
+        Self {
+            entities,
+        }
+    }
+}
+
+impl Annotator for EntitiesAnnotator<'_> {
+
+    fn annotate<'a>(&self, node: &'a PTNode<'a>, context: &mut AnnotatorContext) {
+        if node.kind != ASTKind::PropertyName {
+            return;
+        }
+
+        let insn = node.parent().unwrap();
+        assert_eq!(insn.kind, ASTKind::PropertyInsn);
+        if node.position() == 0 {
+            let prompt = node.text();
+            self.entities.global().properties().keys().filter(|x| x.starts_with(prompt)).for_each(|x| {
+                context.sink.completions.push(x.to_string());
+            });
+        } else {
+
+        }
+
+    }
+}
+
 
 #[cfg(test)]
 pub mod tests {
@@ -76,7 +109,7 @@ pub mod tests {
     use crate::builtin::engine::annotator::AnnotationsSink;
     use crate::builtin::engine::annotator::tests::get_annotations;
     use crate::builtin::engine::entities::EntitiesManager;
-    use crate::tui::settings::ColorType;
+    use crate::ui::settings::ColorType;
 
     pub fn annotate_with_default(s: &str) -> AnnotationsSink {
         let manager = EntitiesManager::new();

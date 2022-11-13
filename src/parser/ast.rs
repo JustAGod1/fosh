@@ -1,12 +1,17 @@
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, format};
+use std::fs::File;
+use std::os::unix::prelude::{AsRawFd, CommandExt, FromRawFd};
+use std::process::{Child, Stdio};
 use std::rc::Rc;
 use downcast_rs::{Downcast, impl_downcast};
 use lalrpop_util::ErrorRecovery;
 use lalrpop_util::lexer::Token;
+use nix::unistd::dup2;
 use termion::color::{Bg, Cyan, Fg, Green, LightGreen, LightMagenta, LightYellow, Magenta, Red, Yellow};
-use crate::builtin::engine::entities::EntitiesManager;
+use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, EntityExecutionError, Execution};
 use crate::builtin::engine::parse_tree::PTNode;
-use crate::builtin::engine::Value;
+use crate::builtin::engine::{Type, Value};
+use crate::entities;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Span {
@@ -108,6 +113,7 @@ pub enum ASTKind {
     // Function mode non-terminals
     Function,
     ParenthesizedArgumentsList,
+    PropertyInsn,
     PropertyCall,
     PropertyName,
     Assignation,
@@ -205,6 +211,7 @@ simple_token!(StringLiteral, ASTKind::StringLiteral);
 simple_token!(NumberLiteral, ASTKind::NumberLiteral);
 simple_token!(Identifier, ASTKind::Identifier);
 simple_token!(ParenthesizedArgumentsList, ASTKind::ParenthesizedArgumentsList);
+simple_token!(PropertyInsn, ASTKind::PropertyInsn);
 simple_token!(PropertyCall, ASTKind::PropertyCall);
 simple_token!(PropertyName, ASTKind::PropertyName);
 simple_token!(Command, ASTKind::Command);
@@ -220,7 +227,7 @@ simple_token!(Equals, ASTKind::Equals);
 simple_token!(VariableName, ASTKind::VariableName);
 
 pub trait Typed {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>>;
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>>;
 }
 
 impl PropertyCall {
@@ -253,7 +260,6 @@ impl PropertyCall {
         }
         None
     }
-
 }
 
 impl Identifier {
@@ -269,10 +275,10 @@ pub struct ASTError {
 }
 
 impl ASTError {
-    pub fn new<T : ASTValue>(expected: T, error: ErrorRecovery<usize, ASTKind, (usize, usize)>) -> Self {
+    pub fn new<T: ASTValue>(expected: T, error: ErrorRecovery<usize, ASTKind, (usize, usize)>) -> Self {
         Self { expected: Box::new(expected), error: Some(error) }
     }
-    pub fn new_artificial<T : ASTValue>(expected: T) -> Self {
+    pub fn new_artificial<T: ASTValue>(expected: T) -> Self {
         Self { expected: Box::new(expected), error: None }
     }
 }
@@ -283,7 +289,7 @@ impl ASTValue for ASTError {
     }
 }
 
-pub fn downcast_to_typed<'a>(pt: &'a PTNode<'a>) -> Option<&'a dyn Typed> {
+pub fn downcast_to_typed<'a>(pt: &'a PTNode) -> Option<&'a dyn Typed> {
     match pt.kind {
         ASTKind::StringLiteral => Some(pt.value::<StringLiteral>()),
         ASTKind::NumberLiteral => Some(pt.value::<NumberLiteral>()),
@@ -293,60 +299,133 @@ pub fn downcast_to_typed<'a>(pt: &'a PTNode<'a>) -> Option<&'a dyn Typed> {
         ASTKind::Piped => Some(pt.value::<Piped>()),
         ASTKind::Sequenced => Some(pt.value::<Sequenced>()),
         ASTKind::BracedCommand => Some(pt.value::<BracedCommand>()),
+        ASTKind::Command => Some(pt.value::<Command>()),
         _ => None,
     }
 }
 
 impl Typed for StringLiteral {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, _entities: &EntitiesManager) -> Option<Result<Value, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         let result = if pt.data.ends_with("\"") && pt.data.len() > 1 {
-            Value::String((&pt.data[1..pt.data.len() - 1]).to_string())
+            (&pt.data[1..pt.data.len() - 1]).to_string()
         } else {
-            Value::String((&pt.data[1..]).to_string())
+            (&pt.data[1..]).to_string()
         };
 
-        return Some(Ok(result));
+
+        return Some(Ok(
+            entities().make_entity(result.clone())
+                .with_implicit(Type::String, move || result.clone())
+        ));
     }
 }
+
 impl Typed for NumberLiteral {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, _entities: &EntitiesManager) -> Option<Result<Value, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         Some(pt.data.parse::<f64>()
             .map_err(|e| e.to_string())
-            .map(|x| Value::Number(x)))
+            .map(|x| entities()
+                .make_entity(x.to_string())
+                .with_implicit(Type::Number, move || x)
+            )
+        )
     }
 }
-impl Typed for Function {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
-        let v = downcast_to_typed(pt.children()[1])
-            .map(|x| x.infer_value(pt.children()[1], entities));
 
-        if v.is_none() { return None;}
+impl Typed for Function {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+        let v = downcast_to_typed(pt.children()[1])
+            .map(|x| x.infer_value(pt.children()[1]));
+
+        if v.is_none() { return None; }
         return None;
     }
 }
+
 impl Typed for PropertyCall {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         return None;
-        
     }
 }
+
 impl Typed for BracedCommand {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         todo!()
     }
 }
+
 impl Typed for Delimited {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         todo!()
     }
 }
+
 impl Typed for Sequenced {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         todo!()
     }
 }
+
 impl Typed for Piped {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>, entities: &EntitiesManager) -> Option<Result<Value, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         todo!()
     }
 }
+
+impl Typed for Command {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+        let children = pt.children();
+        let name = children.get(0).unwrap().data.to_owned();
+        let args = children.get(1).unwrap();
+        let args = if args.data.len() > 0 {
+            args.children().iter().map(|x| x.data.to_owned()).collect()
+        } else {
+            vec![]
+        };
+        let entity = entities().make_entity(format!("{} {:?}", name, args));
+        let entity = entity.with_callee(
+            Callee::new(move |parameters, config| {
+                let mut command = std::process::Command::new(name.clone());
+                command.args(args.clone());
+
+                if config.std_out.is_some() {
+                    command.stdout(Stdio::piped());
+                }
+                if config.std_in.is_some() {
+                    command.stdin(Stdio::piped());
+                }
+                if config.std_err.is_some() {
+                    command.stderr(Stdio::piped());
+                }
+
+                fn redir(old: Option<File>, new: Option<File>) -> Result<(), EntityExecutionError> {
+                    if let Some(old) = old {
+                        if let Some(new) = new {
+                            dup2(old.as_raw_fd(), new.as_raw_fd()).map_err(|e| EntityExecutionError::new().with_general_error(e.to_string()))?;
+                        }
+                    }
+
+                    Ok(())
+                }
+                match command.spawn() {
+                    Ok(child) => {
+                        unsafe {
+                            redir(child.stdout.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_out)?;
+                            redir(child.stderr.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_err)?;
+                            redir(child.stdin.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_in)?;
+                        }
+
+                        Ok(Box::new(child))
+                    }
+                    Err(e) => {
+                        Err(EntityExecutionError::new().with_general_error(e.to_string()))
+                    }
+                }
+            })
+        );
+
+        Some(Ok(entity))
+    }
+}
+
+

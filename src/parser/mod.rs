@@ -57,7 +57,7 @@ pub mod tests {
     use crate::parser::ast::{ASTNode, Span};
     use crate::parser::ast::*;
     use crate::parser::cmd::DelimitedParser;
-    use crate::parser::{ParserAdapter, PropertyCallNodeParser};
+    use crate::parser::{ParserAdapter, PropertyInsnNodeParser};
     use crate::parser::tokenizer::tests::tokenize;
     use crate::parser::tokenizer::Tokenizer;
 

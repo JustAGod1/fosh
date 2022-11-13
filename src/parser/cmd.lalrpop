@@ -72,14 +72,18 @@ Assignation : (Assignation, Vec<ASTNode>) = {
         (Assignation::new(), vec![id, eq, v]),
 }
 
+pub PropertyInsnNode : ASTNode = { <NodeParent<PropertyInsn>> }
+
+PropertyInsn : (PropertyInsn, Vec<ASTNode>) = {
+    <value: Value> <dot: Node<Dot>> <name: Node<PropertyName>> => (PropertyInsn::new(), vec![value, dot, name]),
+    <name: Node<PropertyName>> => (PropertyInsn::new(), vec![name]),
+}
+
 pub PropertyCallNode : ASTNode = { <NodeParent<PropertyCall>> }
 
 PropertyCall : (PropertyCall, Vec<ASTNode>) = {
-    <value: Value> <dot: Node<Dot>> <name: Node<PropertyName>> <args: NodeParent<ParenthesizedArgumentsList>>
-    => (PropertyCall::new(), vec![value, dot, name, args]),
-    <value: Value> <dot: Node<Dot>> <name: Node<PropertyName>> => (PropertyCall::new(), vec![value, dot, name]),
-    <name: Node<PropertyName>> <args: NodeParent<ParenthesizedArgumentsList>> => (PropertyCall::new(), vec![name, args]),
-    <name: Node<PropertyName>> => (PropertyCall::new(), vec![name]),
+    <insn: PropertyInsnNode> <args: NodeParent<ParenthesizedArgumentsList>>
+    => (PropertyCall::new(), vec![insn, args])
 }
 
 ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
@@ -107,13 +111,14 @@ pub Value : ASTNode = {
     <n : StringLiteral> => n,
     <n : Node<NumberLiteral>> => n,
     <n : BracedCommand> => n,
-    <n : NodeParent<PropertyCall>> => n,
+    <n : PropertyCallNode> => n,
+    <n : PropertyInsnNode> => n,
 }
 
 #[inline]
 ValueOrError : ASTNode = {
     <Value>,
-    <ll: @L> <err: !> <rr: @R> => ASTNode::new_simple(ll, rr, ASTError::new(PropertyCall::new(), err), vec![])
+    <ll: @L> <err: !> <rr: @R> => ASTNode::new_simple(ll, rr, ASTError::new(PropertyInsn::new(), err), vec![])
 }
 
 BracedCommand : ASTNode = {

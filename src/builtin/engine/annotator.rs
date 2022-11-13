@@ -1,7 +1,7 @@
 use std::fmt::Display;
-use crate::builtin::annotator::PathAnnotator;
+use crate::builtin::annotator::{EntitiesAnnotator, PathAnnotator};
 use crate::builtin::engine::parse_tree::PTNode;
-use crate::tui::settings::ColorType;
+use crate::ui::settings::ColorType;
 
 pub struct AnnotatorsManager<'a> {
     annotators: Vec<Box<dyn Annotator + 'a>>,
@@ -10,11 +10,10 @@ pub struct AnnotatorsManager<'a> {
 impl <'a>AnnotatorsManager<'a> {
     pub fn new() -> Self {
         let mut annotators: Vec<Box<dyn Annotator>> = Vec::new();
-        annotators.push(Box::new(PathAnnotator::new()));
         Self { annotators }
     }
 
-    pub fn annotate(&self, node: &'a PTNode<'a>, sink: &mut AnnotationsSink) {
+    pub fn annotate<'b>(&self, node: &'b PTNode<'b>, sink: &mut AnnotationsSink) {
         let mut context = AnnotatorContext::new(sink);
         for annotator in &self.annotators {
             annotator.annotate(node, &mut context);

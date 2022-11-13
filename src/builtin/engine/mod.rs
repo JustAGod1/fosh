@@ -9,9 +9,10 @@ use std::num::ParseIntError;
 use std::ops::Deref;
 use std::rc::Rc;
 use crate::builtin::engine::contributors::Contributor;
-use crate::builtin::engine::entities::Entity;
+use crate::builtin::engine::entities::{Entity, EntityExecutionError};
+use crate::EntitiesManager;
 use crate::parser::ast::{ASTKind, Boxed, Identifier, NumberLiteral, PropertyCall, StringLiteral};
-use crate::tui::settings::{ColorType, TUISettings};
+use crate::ui::settings::{ColorType, TUISettings};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -20,13 +21,13 @@ pub enum Type {
     Entity
 }
 
-pub enum Value<'a> {
+pub enum Value {
     String(String),
     Number(f64),
-    Entity(Entity<'a>)
+    Entity(Entity)
 }
 
-impl Display for Value<'_> {
+impl Display for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::String(s) => write!(f, "\"{}\"", s),
@@ -36,9 +37,9 @@ impl Display for Value<'_> {
     }
 }
 
-impl Value<'_> {
+impl Value {
 
-    fn my_type(&self) -> Type {
+    pub fn my_type(&self) -> Type {
         match self {
             Value::String(_) => Type::String,
             Value::Number(_) => Type::Number,
@@ -46,32 +47,42 @@ impl Value<'_> {
         }
     }
 
+    pub fn into_entity(self, entities: &EntitiesManager) -> Entity {
+        match self {
+            Value::Entity(e) => e,
+            Value::String(s) => entities.make_entity(s.clone()).with_implicit(Type::String, move || s.clone()),
+            Value::Number(n) => entities.make_entity(format!("{}", n)).with_implicit(Type::Number, move || n),
+        }
+    }
+
+
 }
 
 #[derive(Clone)]
-pub struct Argument<'a> {
+pub struct Argument {
     pub name: String,
     pub ty: Type,
-    pub contributor: &'a dyn Contributor
+    pub contributor: &'static dyn Contributor
 }
 
-impl Into<Value<'static>> for f64 {
-    fn into(self) -> Value<'static> {
+impl Into<Value> for f64 {
+    fn into(self) -> Value {
         Value::Number(self)
     }
 }
 
-impl Into<Value<'static>> for String {
-    fn into(self) -> Value<'static> {
+impl Into<Value> for String {
+    fn into(self) -> Value {
         Value::String(self)
     }
 }
 
-impl <'a>Into<Value<'a>> for Entity<'a> {
-    fn into(self) -> Value<'a> {
+impl Into<Value> for Entity {
+    fn into(self) -> Value {
         Value::Entity(self)
     }
 }
+
 
 
 
