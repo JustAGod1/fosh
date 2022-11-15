@@ -6,6 +6,7 @@ use pipe::{PipeReader, PipeWriter};
 use crate::builtin::contributors::FilesContributor;
 use crate::builtin::engine::{Argument, Type};
 use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, implicit_type};
+use crate::entities;
 
 
 pub fn initialize_universe(manager: &'static EntitiesManager) {
@@ -16,10 +17,10 @@ fn make_cd(manager: &'static EntitiesManager) -> Entity {
     manager.make_entity("Change Directory call".to_string())
         .with_callee(
             Callee::new_pseudo_execution(
-                move |args, entities, stdin, stdout, stderr|
+                move |args, stdin, stdout, stderr|
                     {
                         write!(stdout, "kek");
-                        Ok(entities.make_entity("cd result".to_string()))
+                        Ok(entities().make_entity("cd result".to_string()))
                     }
             ).with_arguments(vec![Argument {
                 name: "path".to_string(),

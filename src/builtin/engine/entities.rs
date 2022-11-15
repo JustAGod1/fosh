@@ -1,16 +1,18 @@
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, write};
 use std::fs::File;
 use std::io::{Read, stderr, stdin, stdout, Write};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use nix::libc::stat;
+use parse_display_derive::Display;
 use pipe::{PipeReader, PipeWriter};
 use crate::builtin::contributors::FilesContributor;
 use crate::builtin::engine::{Argument, Type, Value};
 use crate::builtin::engine::parse_tree::PTNodeId;
+use crate::entities;
 
 pub struct ExecutionConfig {
     pub std_in: Option<File>,
@@ -19,11 +21,11 @@ pub struct ExecutionConfig {
 }
 
 pub trait Execution<'a> {
-    fn execute(self, entities: &'a EntitiesManager) -> Result<Entity, EntityExecutionError>;
+    fn execute(&mut self) -> Result<Entity, EntityExecutionError>;
 }
 
 pub struct PseudoExecution<'a> {
-    work: Box<dyn for<'b> FnOnce(&'b EntitiesManager) -> Result<Entity, EntityExecutionError> + 'a>,
+    work: Option<Box<dyn for<'b> FnOnce() -> Result<Entity, EntityExecutionError> + 'a>>,
 }
 
 pub struct Callee {
@@ -34,7 +36,7 @@ pub struct Callee {
 
 impl Callee {
     pub fn new<F>(block: F) -> Self
-        where F: for <'b> Fn(&'b [Entity], ExecutionConfig) -> Result<Box<(dyn Execution<'b> + 'b)>, EntityExecutionError> + 'static
+        where F: for<'b> Fn(&'b [Entity], ExecutionConfig) -> Result<Box<(dyn Execution<'b> + 'b)>, EntityExecutionError> + 'static
     {
         Self {
             arguments: vec![],
@@ -44,13 +46,13 @@ impl Callee {
     }
 
     pub fn new_pseudo_execution<F>(block: F) -> Callee
-        where F: 'static + for<'b> FnOnce(&'b [Entity], &'b EntitiesManager, &mut dyn Read, &mut dyn Write, &mut dyn Write)
+        where F: 'static + FnOnce(&[Entity], &mut dyn Read, &mut dyn Write, &mut dyn Write)
             -> Result<Entity, EntityExecutionError> + Copy
     {
         Self {
             arguments: vec![],
             callee: Box::new(move |args, mut config| {
-                let execution = PseudoExecution::from(move |entities| {
+                let execution = PseudoExecution::from(move || {
                     let mut stdin = stdin();
                     let mut stdout = stdout();
                     let mut stderr = stderr();
@@ -58,7 +60,7 @@ impl Callee {
                     let mut stdout = config.std_out.as_mut().map(|a| a as &mut dyn Write).unwrap_or_else(|| &mut stdout);
                     let mut stdin = config.std_in.as_mut().map(|a| a as &mut dyn Read).unwrap_or_else(|| &mut stdin);
 
-                    block(args, entities, &mut stdin, &mut stdout, &mut stderr)
+                    block(args, &mut stdin, &mut stdout, &mut stderr)
                 });
                 Ok(Box::new(execution))
             }),
@@ -79,32 +81,35 @@ impl Callee {
 
 impl<'a> PseudoExecution<'a> {
     pub fn from<F>(work: F) -> Self
-        where F: for<'b> FnOnce(&'b EntitiesManager) -> Result<Entity, EntityExecutionError> + 'a, F: 'a
+        where F: FnOnce() -> Result<Entity, EntityExecutionError> + 'a, F: 'a
     {
         Self {
-            work: Box::new(work)
+            work: Some(Box::new(work))
         }
     }
 }
 
 impl<'b> Execution<'b> for PseudoExecution<'b> {
-    fn execute(self, entities: &EntitiesManager) -> Result<Entity, EntityExecutionError> {
-        (self.work)(entities)
+    fn execute(&mut self) -> Result<Entity, EntityExecutionError> {
+        let mut work = None::<_>;
+        std::mem::swap(&mut work, &mut self.work);
+        work.expect("Cannot call execution twice")()
     }
 }
 
 
 impl<'b> Execution<'b> for Child {
-    fn execute(mut self, entities: &EntitiesManager) -> Result<Entity, EntityExecutionError> {
+    fn execute(&mut self) -> Result<Entity, EntityExecutionError> {
         let status = self.wait().map_err(|x| x.to_string().into())?;
         Ok(
-            entities
-                .make_entity(format!("Process exited with status {}", status))
-                .with_property("status", Value::Number(status.code().unwrap_or(-1) as f64).into_entity(entities))
+            entities()
+                .make_entity("Execution result".to_string())
+                .with_property("status", Value::Number(status.code().unwrap_or(-1) as f64).into_entity())
         )
     }
 }
 
+#[derive(Debug)]
 pub struct EntityExecutionError {
     general: Option<String>,
     errors: HashMap<PTNodeId, Vec<String>>,
@@ -154,7 +159,24 @@ pub struct Entity {
 
 impl Display for Entity {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
+        let mut properties = String::new();
+        properties.push('[');
+
+        for (name, value) in &self.properties {
+            properties.push_str(&format!("{}: {},", name, value));
+        }
+        properties.push(']');
+
+        let mut implicits = String::new();
+        if !self.implicits.is_empty() {
+            implicits.push_str(", implicits: [");
+            for x in self.implicits.keys() {
+                implicits.push_str(format!("{:?}", x).as_str());
+            }
+            implicits.push_str("] ");
+        }
+
+        write!(f, "{{ {}: {{ prototype: {:?}, properties: {} {}}} }}", self.name, self.prototype.map(|a| a.borrow().name.clone()), properties, implicits)
     }
 }
 

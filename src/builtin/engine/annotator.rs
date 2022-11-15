@@ -9,7 +9,7 @@ pub struct AnnotatorsManager<'a> {
 
 impl <'a>AnnotatorsManager<'a> {
     pub fn new() -> Self {
-        let mut annotators: Vec<Box<dyn Annotator>> = Vec::new();
+        let annotators: Vec<Box<dyn Annotator>> = Vec::new();
         Self { annotators }
     }
 

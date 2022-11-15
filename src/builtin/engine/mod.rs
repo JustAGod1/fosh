@@ -10,7 +10,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 use crate::builtin::engine::contributors::Contributor;
 use crate::builtin::engine::entities::{Entity, EntityExecutionError};
-use crate::EntitiesManager;
+use crate::{entities, EntitiesManager};
 use crate::parser::ast::{ASTKind, Boxed, Identifier, NumberLiteral, PropertyCall, StringLiteral};
 use crate::ui::settings::{ColorType, TUISettings};
 
@@ -47,11 +47,11 @@ impl Value {
         }
     }
 
-    pub fn into_entity(self, entities: &EntitiesManager) -> Entity {
+    pub fn into_entity(self) -> Entity {
         match self {
             Value::Entity(e) => e,
-            Value::String(s) => entities.make_entity(s.clone()).with_implicit(Type::String, move || s.clone()),
-            Value::Number(n) => entities.make_entity(format!("{}", n)).with_implicit(Type::Number, move || n),
+            Value::String(s) => entities().make_entity(s.clone()).with_implicit(Type::String, move || s.clone()),
+            Value::Number(n) => entities().make_entity(format!("{}", n)).with_implicit(Type::Number, move || n),
         }
     }
 

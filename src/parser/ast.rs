@@ -343,31 +343,31 @@ impl Typed for Function {
 }
 
 impl Typed for PropertyCall {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         return None;
     }
 }
 
 impl Typed for BracedCommand {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         todo!()
     }
 }
 
 impl Typed for Delimited {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         todo!()
     }
 }
 
 impl Typed for Sequenced {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         todo!()
     }
 }
 
 impl Typed for Piped {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
         todo!()
     }
 }

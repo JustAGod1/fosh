@@ -40,12 +40,26 @@ fn execute_command_or_function<'a>(command: &'a PTNode<'a>, tui: &TUI) {
                             println!("execution not found")
                         }
                         Some(exe) => {
-
-                            (exe.callee)(&[], ExecutionConfig {
+                            match (exe.callee)(&[], ExecutionConfig {
                                 std_in: None,
                                 std_out: None,
                                 std_err: None,
-                            });
+                            }) {
+                                Ok(mut e) => {
+                                    match e.execute() {
+                                        Ok(entity) => {
+                                            println!("{}", entity);
+                                        },
+                                        Err(err) => {
+                                            println!("{:?}", err);
+
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("{:?}", e)
+                                }
+                            };
                         }
                     }
                 }
