@@ -7,6 +7,7 @@ use std::io::{Stdout, Write};
 use rand::distributions::Open01;
 use termion::event::Key;
 use termion::input::TermRead;
+use termion::is_tty;
 use termion::raw::{IntoRawMode, RawTerminal};
 use crate::builtin::engine::annotator::{AnnotationsSink, Annotator, AnnotatorsManager};
 use crate::builtin::engine::parse_tree::{parse_line, ParseTree, PTNode};
@@ -102,6 +103,18 @@ impl<'a> TUI<'a> {
     }
 
     pub fn next_line(&mut self) -> Result<String, io::Error> {
+        if is_tty(&io::stdout()) {
+            self.next_line_interactive()
+        } else {
+            self.next_line_bulk()
+        }
+    }
+    fn next_line_bulk(&mut self) -> Result<String, io::Error> {
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        Ok(line)
+    }
+    fn next_line_interactive(&mut self) -> Result<String, io::Error> {
         let mut stdout = std::io::stdout().into_raw_mode().unwrap();
         write!(stdout, "{}", self.prompt).unwrap();
         write!(stdout, "{}", CSIControlCodes::SetCursorStyle(CursorMode::SteadyBar)).unwrap();

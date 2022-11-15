@@ -14,6 +14,8 @@ use crate::builtin::engine::{Argument, Type, Value};
 use crate::builtin::engine::parse_tree::PTNodeId;
 use crate::entities;
 
+pub type EntityRef = Rc<RefCell<Entity>>;
+
 pub struct ExecutionConfig {
     pub std_in: Option<File>,
     pub std_out: Option<File>,
@@ -21,22 +23,22 @@ pub struct ExecutionConfig {
 }
 
 pub trait Execution<'a> {
-    fn execute(&mut self) -> Result<Entity, EntityExecutionError>;
+    fn execute(&mut self) -> Result<EntityRef, EntityExecutionError>;
 }
 
 pub struct PseudoExecution<'a> {
-    work: Option<Box<dyn for<'b> FnOnce() -> Result<Entity, EntityExecutionError> + 'a>>,
+    work: Option<Box<dyn for<'b> FnOnce() -> Result<EntityRef, EntityExecutionError> + 'a>>,
 }
 
 pub struct Callee {
     pub arguments: Vec<Argument>,
-    pub callee: Box<dyn for<'b> Fn(&'b [Entity], ExecutionConfig) -> Result<Box<dyn Execution<'b> + 'b>, EntityExecutionError>>,
-    pub result_prototype: Option<Entity>,
+    pub callee: Box<dyn for<'b> Fn(&'b [EntityRef], ExecutionConfig) -> Result<Box<dyn Execution<'b> + 'b>, EntityExecutionError>>,
+    pub result_prototype: Option<EntityRef>,
 }
 
 impl Callee {
     pub fn new<F>(block: F) -> Self
-        where F: for<'b> Fn(&'b [Entity], ExecutionConfig) -> Result<Box<(dyn Execution<'b> + 'b)>, EntityExecutionError> + 'static
+        where F: for<'b> Fn(&'b [EntityRef], ExecutionConfig) -> Result<Box<(dyn Execution<'b> + 'b)>, EntityExecutionError> + 'static
     {
         Self {
             arguments: vec![],
@@ -46,8 +48,8 @@ impl Callee {
     }
 
     pub fn new_pseudo_execution<F>(block: F) -> Callee
-        where F: 'static + FnOnce(&[Entity], &mut dyn Read, &mut dyn Write, &mut dyn Write)
-            -> Result<Entity, EntityExecutionError> + Copy
+        where F: 'static + FnOnce(&[EntityRef], &mut dyn Read, &mut dyn Write, &mut dyn Write)
+            -> Result<EntityRef, EntityExecutionError> + Copy
     {
         Self {
             arguments: vec![],
@@ -73,7 +75,7 @@ impl Callee {
         self
     }
 
-    pub fn with_result_prototype(mut self, prototype: Entity) -> Self {
+    pub fn with_result_prototype(mut self, prototype: EntityRef) -> Self {
         self.result_prototype = Some(prototype);
         self
     }
@@ -81,7 +83,7 @@ impl Callee {
 
 impl<'a> PseudoExecution<'a> {
     pub fn from<F>(work: F) -> Self
-        where F: FnOnce() -> Result<Entity, EntityExecutionError> + 'a, F: 'a
+        where F: FnOnce() -> Result<EntityRef, EntityExecutionError> + 'a, F: 'a
     {
         Self {
             work: Some(Box::new(work))
@@ -90,7 +92,7 @@ impl<'a> PseudoExecution<'a> {
 }
 
 impl<'b> Execution<'b> for PseudoExecution<'b> {
-    fn execute(&mut self) -> Result<Entity, EntityExecutionError> {
+    fn execute(&mut self) -> Result<EntityRef, EntityExecutionError> {
         let mut work = None::<_>;
         std::mem::swap(&mut work, &mut self.work);
         work.expect("Cannot call execution twice")()
@@ -99,7 +101,7 @@ impl<'b> Execution<'b> for PseudoExecution<'b> {
 
 
 impl<'b> Execution<'b> for Child {
-    fn execute(&mut self) -> Result<Entity, EntityExecutionError> {
+    fn execute(&mut self) -> Result<EntityRef, EntityExecutionError> {
         let status = self.wait().map_err(|x| x.to_string().into())?;
         Ok(
             entities()
@@ -149,12 +151,12 @@ impl Into<EntityExecutionError> for &str {
 pub struct Entity {
     name: String,
 
-    implicits: HashMap<Type, Box<dyn Fn() -> Value + 'static>>,
+    implicits: HashMap<Type, Box<dyn Fn() -> Value +'static>>,
     callee: Option<Box<Callee>>,
 
-    properties: HashMap<String, Entity>,
+    properties: HashMap<String, EntityRef>,
 
-    prototype: Option<&'static RefCell<Entity>>,
+    prototype: Option<EntityRef>,
 }
 
 impl Display for Entity {
@@ -163,7 +165,7 @@ impl Display for Entity {
         properties.push('[');
 
         for (name, value) in &self.properties {
-            properties.push_str(&format!("{}: {},", name, value));
+            properties.push_str(&format!("{}: {},", name, value.borrow()));
         }
         properties.push(']');
 
@@ -176,7 +178,7 @@ impl Display for Entity {
             implicits.push_str("] ");
         }
 
-        write!(f, "{{ {}: {{ prototype: {:?}, properties: {} {}}} }}", self.name, self.prototype.map(|a| a.borrow().name.clone()), properties, implicits)
+        write!(f, "{{ {}: {{ prototype: {:?}, properties: {} {}}} }}", self.name, self.prototype.clone().map(|a| a.borrow().name.clone()), properties, implicits)
     }
 }
 
@@ -187,42 +189,53 @@ pub struct Comms<'a> {
 }
 
 impl Entity {
-    pub fn with_callee(mut self, callee: Callee) -> Self {
-        self.callee = Some(Box::new(callee));
-        self
-    }
 
-    pub fn with_property(mut self, name: &str, property: Entity) -> Self {
-        self.properties.insert(name.to_string(), property);
-        self
-    }
-
-    pub fn add_property(&mut self, name: &str, property: Entity) {
-        self.properties.insert(name.to_string(), property);
-    }
-
-    pub fn with_implicit<F, V>(mut self, type_: Type, implicit: F) -> Self
-        where F: Fn() -> V, F: 'static, V: Into<Value>
-    {
-        self.implicits.insert(type_, Box::new(move || implicit().into()));
-        self
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
     pub fn implicits(&self) -> &HashMap<Type, Box<dyn Fn() -> Value + 'static>> {
         &self.implicits
     }
     pub fn callee(&self) -> &Option<Box<Callee>> {
         &self.callee
     }
-    pub fn properties(&self) -> &HashMap<String, Entity> {
+    pub fn properties(&self) -> &HashMap<String, EntityRef> {
         &self.properties
     }
-    pub fn prototype(&self) -> Option<&'static RefCell<Entity>> {
-        self.prototype
+    pub fn prototype(&self) -> Option<EntityRef> {
+        self.prototype.clone()
     }
+}
+
+impl FoshEntity for EntityRef {
+    fn name(&self) -> &str {
+        let x = &self.borrow();
+        unsafe { std::mem::transmute(x.name.as_str()) }
+    }
+    fn with_callee(self, callee: Callee) -> Self {
+        self.borrow_mut().callee = Some(Box::new(callee));
+        self
+    }
+    fn with_property(mut self, name: &str, property: EntityRef) -> Self {
+        self.borrow_mut().properties.insert(name.to_string(), property);
+        self
+    }
+    fn add_property(&mut self, name: &str, property: EntityRef) {
+        self.borrow_mut().properties.insert(name.to_string(), property);
+    }
+    fn with_implicit<F, V>(mut self, type_: Type, implicit: F) -> Self
+        where F: Fn() -> V, F: 'static, V: Into<Value>
+    {
+        self.borrow_mut().implicits.insert(type_, Box::new(move || implicit().into()));
+        self
+    }
+}
+
+pub trait FoshEntity {
+    fn name(&self) -> &str;
+    fn with_callee(self, callee: Callee) -> Self;
+    fn with_property(self, name: &str, property: EntityRef) -> Self;
+    fn add_property(&mut self, name: &str, property: EntityRef);
+    fn with_implicit<F, V>(self, type_: Type, implicit: F) -> Self
+        where F: Fn() -> V, F: 'static, V: Into<Value>
+    ;
 }
 
 pub fn implicit_type(typ: Type, entity: Option<&Entity>) -> Option<Value> {
@@ -238,46 +251,48 @@ pub fn implicit_type(typ: Type, entity: Option<&Entity>) -> Option<Value> {
 
 pub struct EntitiesManager {
     pub files_contributor: FilesContributor,
-    any: RefCell<Entity>,
-    global: RefCell<Entity>,
+    any: EntityRef,
+    global: EntityRef,
 }
 
 impl EntitiesManager {
     pub fn new() -> EntitiesManager {
         EntitiesManager {
             files_contributor: FilesContributor {},
-            any: RefCell::new(Entity {
+            any: Rc::new(RefCell::new(Entity {
                 name: "Any".to_string(),
                 implicits: HashMap::new(),
                 callee: None,
                 properties: HashMap::new(),
                 prototype: None,
-            }),
-            global: RefCell::new(Entity {
+            })),
+            global: Rc::new(RefCell::new(Entity {
                 name: "Global".to_string(),
                 implicits: HashMap::from([]),
                 callee: None,
                 properties: HashMap::from([]),
                 prototype: None,
-            }),
+            })),
         }
     }
 
-    pub fn make_entity(&self, name: String) -> Entity {
-        Entity {
+    pub fn make_entity(&self, name: String) -> EntityRef {
+        Rc::new(RefCell::new(Entity {
             name,
             implicits: HashMap::new(),
             callee: None,
             properties: HashMap::new(),
-            prototype: Some(unsafe { std::mem::transmute(&self.any) }),
-        }
+            prototype: Some(self.any.clone())
+        }))
     }
 
-    pub fn global_mut(&self) -> RefMut<Entity> {
-        unsafe { std::mem::transmute(self.global.borrow_mut()) }
+    pub fn global(&self) -> EntityRef {
+        self.global.clone()
     }
-    pub fn global(&self) -> Ref<Entity> {
-        unsafe { std::mem::transmute(self.global.borrow()) }
+
+    pub fn any(&self) -> EntityRef {
+        self.any.clone()
     }
+
 }
 

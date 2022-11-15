@@ -8,7 +8,7 @@ use lalrpop_util::ErrorRecovery;
 use lalrpop_util::lexer::Token;
 use nix::unistd::dup2;
 use termion::color::{Bg, Cyan, Fg, Green, LightGreen, LightMagenta, LightYellow, Magenta, Red, Yellow};
-use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, EntityExecutionError, Execution};
+use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, FoshEntity, EntityExecutionError, EntityRef, Execution};
 use crate::builtin::engine::parse_tree::PTNode;
 use crate::builtin::engine::{Type, Value};
 use crate::entities;
@@ -227,7 +227,10 @@ simple_token!(Equals, ASTKind::Equals);
 simple_token!(VariableName, ASTKind::VariableName);
 
 pub trait Typed {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>>;
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef>;
+    fn infer_execution_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<(Vec<&'a PTNode<'a>>, EntityRef)> {
+        self.infer_value(pt).map(|v| (vec![], v))
+    }
 }
 
 impl PropertyCall {
@@ -300,12 +303,14 @@ pub fn downcast_to_typed<'a>(pt: &'a PTNode) -> Option<&'a dyn Typed> {
         ASTKind::Sequenced => Some(pt.value::<Sequenced>()),
         ASTKind::BracedCommand => Some(pt.value::<BracedCommand>()),
         ASTKind::Command => Some(pt.value::<Command>()),
+        ASTKind::PropertyInsn => Some(pt.value::<PropertyInsn>()),
+        ASTKind::PropertyName => Some(pt.value::<PropertyName>()),
         _ => None,
     }
 }
 
 impl Typed for StringLiteral {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
         let result = if pt.data.ends_with("\"") && pt.data.len() > 1 {
             (&pt.data[1..pt.data.len() - 1]).to_string()
         } else {
@@ -313,29 +318,37 @@ impl Typed for StringLiteral {
         };
 
 
-        return Some(Ok(
-            entities().make_entity(result.clone())
-                .with_implicit(Type::String, move || result.clone())
-        ));
+        return
+            Some(entities().make_entity(result.clone())
+                .with_implicit(Type::String, move || result.clone()));
     }
 }
 
 impl Typed for NumberLiteral {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
         Some(pt.data.parse::<f64>()
             .map_err(|e| e.to_string())
             .map(|x| entities()
                 .make_entity(x.to_string())
                 .with_implicit(Type::Number, move || x)
             )
+            .unwrap()
         )
     }
 }
 
 impl Typed for Function {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
         let v = downcast_to_typed(pt.children()[1])
             .map(|x| x.infer_value(pt.children()[1]));
+
+        if v.is_none() { return None; }
+        return None;
+    }
+
+    fn infer_execution_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<(Vec<&'a PTNode<'a>>, EntityRef)> {
+        let v = downcast_to_typed(pt.children()[1])
+            .map(|x| x.infer_execution_value(pt.children()[1]));
 
         if v.is_none() { return None; }
         return None;
@@ -343,37 +356,93 @@ impl Typed for Function {
 }
 
 impl Typed for PropertyCall {
-    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
-        return None;
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
+        let left = pt.children()[0];
+
+        let left = downcast_to_typed(left).unwrap().infer_value(left);
+        if left.is_none() { return None; }
+        let left = left.unwrap();
+
+        if let Some(callee) = left.borrow().callee() {
+            return callee.result_prototype.clone();
+        }
+
+        None
+    }
+
+    fn infer_execution_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<(Vec<&'a PTNode<'a>>, EntityRef)> {
+        let left = pt.children()[0];
+
+        let left = downcast_to_typed(left).unwrap().infer_value(left);
+        let left = left?;
+
+        let parenthesis = pt.children()[1];
+
+        let mut args: Vec<&'a PTNode<'a>> = Vec::new();
+
+        for child in parenthesis.children().iter() {
+            if downcast_to_typed(child).is_some() {
+                args.push(*child);
+            }
+        }
+
+        return Some((args, left));
     }
 }
 
+impl Typed for PropertyName {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
+        let name = pt.data;
+        let global = entities().global();
+        let property = global.borrow().properties().get(name).map(|a| a.clone());
+        return property;
+    }
+}
+
+impl Typed for PropertyInsn {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
+        let left = pt.children()[0];
+
+        let left = downcast_to_typed(left).unwrap().infer_value(left);
+        if pt.children().len() == 1 { return left;}
+        if left.is_none() { return None; }
+        let left = left.unwrap();
+
+
+        let right = pt.children()[2];
+        let name = right.data;
+
+        let x = left.borrow().properties().get(name).map(|x| x.clone()); x
+    }
+
+}
+
 impl Typed for BracedCommand {
-    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
-        todo!()
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
+        downcast_to_typed(pt.children()[1]).unwrap().infer_value(pt.children()[1])
     }
 }
 
 impl Typed for Delimited {
-    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<EntityRef> {
         todo!()
     }
 }
 
 impl Typed for Sequenced {
-    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<EntityRef> {
         todo!()
     }
 }
 
 impl Typed for Piped {
-    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, _: &'a PTNode<'a>) -> Option<EntityRef> {
         todo!()
     }
 }
 
 impl Typed for Command {
-    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<Result<Entity, String>> {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
         let children = pt.children();
         let name = children.get(0).unwrap().data.to_owned();
         let args = children.get(1).unwrap();
@@ -424,7 +493,7 @@ impl Typed for Command {
             })
         );
 
-        Some(Ok(entity))
+        Some(entity)
     }
 }
 

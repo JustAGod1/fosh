@@ -17,7 +17,7 @@ use termion::input::{TermRead};
 use termion::is_tty;
 use termion::raw::IntoRawMode;
 use crate::builtin::annotator::{EntitiesAnnotator, PathAnnotator};
-use crate::builtin::engine::entities::EntitiesManager;
+use crate::builtin::engine::entities::{EntitiesManager, EntityRef};
 use crate::builtin::engine::parse_tree::parse_line;
 use crate::builtin::entities::initialize_universe;
 use crate::runtime::execution::execute;
@@ -68,7 +68,14 @@ fn main() {
         let line = tui.next_line().unwrap();
         let tree = parse_line(&line).unwrap();
 
-        execute(tree.root(), &tui);
+        match execute(tree.root(), &tui) {
+            Ok(entity) => {
+                println!("Entity: {}", entity.borrow());
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+            }
+        }
     }
 }
 

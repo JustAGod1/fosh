@@ -17,6 +17,7 @@ pub struct PTNode<'a> {
     id: PTNodeId,
 }
 
+#[allow(dead_code)]
 impl<'a> PTNode<'a> {
     pub fn text(&'a self) -> &'a str {
         return self.data;

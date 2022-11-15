@@ -9,7 +9,7 @@ use std::num::ParseIntError;
 use std::ops::Deref;
 use std::rc::Rc;
 use crate::builtin::engine::contributors::Contributor;
-use crate::builtin::engine::entities::{Entity, EntityExecutionError};
+use crate::builtin::engine::entities::{Entity, FoshEntity, EntityExecutionError, EntityRef};
 use crate::{entities, EntitiesManager};
 use crate::parser::ast::{ASTKind, Boxed, Identifier, NumberLiteral, PropertyCall, StringLiteral};
 use crate::ui::settings::{ColorType, TUISettings};
@@ -24,7 +24,7 @@ pub enum Type {
 pub enum Value {
     String(String),
     Number(f64),
-    Entity(Entity)
+    Entity(EntityRef)
 }
 
 impl Display for Value {
@@ -32,7 +32,7 @@ impl Display for Value {
         match self {
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::Number(n) => write!(f, "{}", n),
-            Value::Entity(e) => write!(f, "{}", e),
+            Value::Entity(e) => write!(f, "{}", e.borrow()),
         }
     }
 }
@@ -47,7 +47,7 @@ impl Value {
         }
     }
 
-    pub fn into_entity(self) -> Entity {
+    pub fn into_entity(self) -> EntityRef {
         match self {
             Value::Entity(e) => e,
             Value::String(s) => entities().make_entity(s.clone()).with_implicit(Type::String, move || s.clone()),
@@ -77,7 +77,7 @@ impl Into<Value> for String {
     }
 }
 
-impl Into<Value> for Entity {
+impl Into<Value> for EntityRef {
     fn into(self) -> Value {
         Value::Entity(self)
     }

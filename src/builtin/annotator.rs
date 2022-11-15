@@ -2,7 +2,7 @@ use std::ops::Index;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use crate::builtin::engine::annotator::{Annotator, AnnotatorContext};
-use crate::builtin::engine::entities::EntitiesManager;
+use crate::builtin::engine::entities::{EntitiesManager, FoshEntity};
 use crate::builtin::engine::parse_tree::PTNode;
 use crate::builtin::engine::Value;
 use crate::parser::ast::{ASTKind, Identifier, NumberLiteral, ParenthesizedArgumentsList, PropertyCall, StringLiteral};
@@ -91,7 +91,7 @@ impl Annotator for EntitiesAnnotator<'_> {
         assert_eq!(insn.kind, ASTKind::PropertyInsn);
         if node.position() == 0 {
             let prompt = node.text();
-            self.entities.global().properties().keys().filter(|x| x.starts_with(prompt)).for_each(|x| {
+            self.entities.global().borrow().properties().keys().filter(|x| x.starts_with(prompt)).for_each(|x| {
                 context.sink.completions.push(x.to_string());
             });
         } else {
