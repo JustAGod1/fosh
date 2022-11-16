@@ -8,8 +8,9 @@ use lalrpop_util::ErrorRecovery;
 use lalrpop_util::lexer::Token;
 use nix::unistd::dup2;
 use termion::color::{Bg, Cyan, Fg, Green, LightGreen, LightMagenta, LightYellow, Magenta, Red, Yellow};
-use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, FoshEntity, EntityExecutionError, EntityRef, Execution};
-use crate::builtin::engine::parse_tree::PTNode;
+use fosh::error_printer::ErrorType;
+use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, FoshEntity, EntityExecutionError, EntityRef, Execution, ProcessExecution};
+use crate::builtin::engine::parse_tree::{PTNode, PTNodeId};
 use crate::builtin::engine::{Type, Value};
 use crate::entities;
 
@@ -78,6 +79,7 @@ impl ASTNode {
         }
         return None;
     }
+
 }
 
 
@@ -118,6 +120,7 @@ pub enum ASTKind {
     PropertyName,
     Assignation,
     BracedCommand,
+    Parameter,
 
     // Command mode non-terminals
     Command,
@@ -225,12 +228,10 @@ simple_token!(BracedCommand, ASTKind::BracedCommand);
 simple_token!(Assignation, ASTKind::Assignation);
 simple_token!(Equals, ASTKind::Equals);
 simple_token!(VariableName, ASTKind::VariableName);
+simple_token!(Parameter, ASTKind::Parameter);
 
 pub trait Typed {
     fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef>;
-    fn infer_execution_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<(Vec<&'a PTNode<'a>>, EntityRef)> {
-        self.infer_value(pt).map(|v| (vec![], v))
-    }
 }
 
 impl PropertyCall {
@@ -305,7 +306,14 @@ pub fn downcast_to_typed<'a>(pt: &'a PTNode) -> Option<&'a dyn Typed> {
         ASTKind::Command => Some(pt.value::<Command>()),
         ASTKind::PropertyInsn => Some(pt.value::<PropertyInsn>()),
         ASTKind::PropertyName => Some(pt.value::<PropertyName>()),
+        ASTKind::Parameter => Some(pt.value::<Parameter>()),
         _ => None,
+    }
+}
+
+impl Typed for Parameter {
+    fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
+        return downcast_to_typed(pt.children()[0]).and_then(|x| x.infer_value(pt));
     }
 }
 
@@ -345,14 +353,6 @@ impl Typed for Function {
         if v.is_none() { return None; }
         return None;
     }
-
-    fn infer_execution_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<(Vec<&'a PTNode<'a>>, EntityRef)> {
-        let v = downcast_to_typed(pt.children()[1])
-            .map(|x| x.infer_execution_value(pt.children()[1]));
-
-        if v.is_none() { return None; }
-        return None;
-    }
 }
 
 impl Typed for PropertyCall {
@@ -364,30 +364,29 @@ impl Typed for PropertyCall {
         let left = left.unwrap();
 
         if let Some(callee) = left.borrow().callee() {
-            return callee.result_prototype.clone();
+            if callee.result_prototype.is_none() { return None; }
+            let result_prototype = callee.result_prototype.as_ref().unwrap();
+            let right = pt.children()[1];
+            let values : Vec<Option<EntityRef>> = right.children().iter()
+                .filter(|a| downcast_to_typed(a).is_some())
+                .map(|a| downcast_to_typed(a).unwrap().infer_value(a))
+                .collect();
+
+            let mut args = vec![];
+            for i in 0..callee.arguments.len() {
+                if i < values.len() {
+                    args.push(values[i].clone());
+                } else {
+                    args.push(None);
+                }
+            }
+
+            return result_prototype(left.clone(), &args)
         }
 
         None
     }
 
-    fn infer_execution_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<(Vec<&'a PTNode<'a>>, EntityRef)> {
-        let left = pt.children()[0];
-
-        let left = downcast_to_typed(left).unwrap().infer_value(left);
-        let left = left?;
-
-        let parenthesis = pt.children()[1];
-
-        let mut args: Vec<&'a PTNode<'a>> = Vec::new();
-
-        for child in parenthesis.children().iter() {
-            if downcast_to_typed(child).is_some() {
-                args.push(*child);
-            }
-        }
-
-        return Some((args, left));
-    }
 }
 
 impl Typed for PropertyName {
@@ -452,8 +451,9 @@ impl Typed for Command {
             vec![]
         };
         let entity = entities().make_entity(format!("{} {:?}", name, args));
+        let node_id = pt.id();
         let entity = entity.with_callee(
-            Callee::new(move |parameters, config| {
+            Callee::new(move |_me, parameters, config| {
                 let mut command = std::process::Command::new(name.clone());
                 command.args(args.clone());
 
@@ -467,10 +467,14 @@ impl Typed for Command {
                     command.stderr(Stdio::piped());
                 }
 
-                fn redir(old: Option<File>, new: Option<File>) -> Result<(), EntityExecutionError> {
+                fn redir(old: Option<File>, new: Option<File>, id: PTNodeId) -> Result<(), EntityExecutionError> {
                     if let Some(old) = old {
                         if let Some(new) = new {
-                            dup2(old.as_raw_fd(), new.as_raw_fd()).map_err(|e| EntityExecutionError::new().with_general_error(e.to_string()))?;
+                            dup2(old.as_raw_fd(), new.as_raw_fd()).map_err(|e| {
+                                let mut err = EntityExecutionError::new();
+                                err.with_error(id, ErrorType::Execution).with_notes(vec![e.to_string()]);
+                                err
+                            })?;
                         }
                     }
 
@@ -479,15 +483,19 @@ impl Typed for Command {
                 match command.spawn() {
                     Ok(child) => {
                         unsafe {
-                            redir(child.stdout.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_out)?;
-                            redir(child.stderr.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_err)?;
-                            redir(child.stdin.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_in)?;
+                            redir(child.stdout.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_out, node_id)?;
+                            redir(child.stderr.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_err, node_id)?;
+                            redir(child.stdin.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_in, node_id)?;
                         }
 
-                        Ok(Box::new(child))
+                        Ok(Box::new(ProcessExecution::new(child, node_id)))
                     }
                     Err(e) => {
-                        Err(EntityExecutionError::new().with_general_error(e.to_string()))
+                        let mut err = EntityExecutionError::new();
+                        err
+                            .with_error(node_id, ErrorType::Execution)
+                            .with_notes(vec![e.to_string()]);
+                        Err(err)
                     }
                 }
             })

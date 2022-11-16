@@ -1,33 +1,9 @@
 use std::fmt::Display;
-use crate::builtin::annotator::{EntitiesAnnotator, PathAnnotator};
 use crate::builtin::engine::parse_tree::PTNode;
 use crate::ui::settings::ColorType;
 
-pub struct AnnotatorsManager<'a> {
-    annotators: Vec<Box<dyn Annotator + 'a>>,
-}
-
-impl <'a>AnnotatorsManager<'a> {
-    pub fn new() -> Self {
-        let annotators: Vec<Box<dyn Annotator>> = Vec::new();
-        Self { annotators }
-    }
-
-    pub fn annotate<'b>(&self, node: &'b PTNode<'b>, sink: &mut AnnotationsSink) {
-        let mut context = AnnotatorContext::new(sink);
-        for annotator in &self.annotators {
-            annotator.annotate(node, &mut context);
-        }
-    }
-
-    pub fn register_annotator(&mut self, annotator: Box<dyn Annotator + 'a>) {
-        self.annotators.push(annotator);
-    }
-}
-
-
 pub trait Annotator {
-    fn annotate<'a>(&self, node: &'a PTNode<'a>, context: &mut AnnotatorContext);
+    fn annotate<'a>(&self, node: &'a PTNode<'a>, context: &mut AnnotationsSink);
 }
 
 pub struct AnnotationsSink {
@@ -90,32 +66,4 @@ impl <'a>AnnotatorContext<'a> {
     pub fn sink(&mut self) -> &mut AnnotationsSink {
         self.sink
     }
-}
-
-#[cfg(test)]
-pub mod tests {
-    use crate::builtin::engine::annotator::{AnnotationsSink, Annotator, AnnotatorsManager};
-    use crate::parser::tests::build_pt_def;
-
-    pub fn get_annotations<'a>(s: &str, annotators: Vec<Box<dyn Annotator + 'a>>) -> AnnotationsSink {
-        let mut manager = AnnotatorsManager::new();
-        for x in annotators {
-            manager.register_annotator(x)
-        }
-
-        let replaced = s.replace("^", "");
-        let pt = build_pt_def(replaced.as_str());
-        let pt = pt.root();
-
-        let mut sink = AnnotationsSink::new();
-        let node = pt.find_leaf_on_pos(s.find("^").unwrap());
-        if node.is_none() {
-            return sink;
-        }
-        let node = node.unwrap();
-        manager.annotate(node, &mut sink);
-
-        sink
-    }
-
 }

@@ -3,13 +3,14 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::io;
-use std::io::{Stdout, Write};
+use std::io::{Read, stdin, Stdout, Write};
 use rand::distributions::Open01;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::is_tty;
 use termion::raw::{IntoRawMode, RawTerminal};
-use crate::builtin::engine::annotator::{AnnotationsSink, Annotator, AnnotatorsManager};
+use crate::builtin::annotator::downcast_to_annotator;
+use crate::builtin::engine::annotator::{AnnotationsSink, Annotator};
 use crate::builtin::engine::parse_tree::{parse_line, ParseTree, PTNode};
 use crate::parser;
 use crate::ui::settings::TUISettings;
@@ -84,7 +85,6 @@ pub enum CSIControlCodes {
 }
 
 pub struct TUI<'a> {
-    annotators: AnnotatorsManager<'a>,
     prompt: Cow<'a, str>,
     settings: &'a RefCell<TUISettings>
 }
@@ -93,28 +93,42 @@ impl<'a> TUI<'a> {
     pub fn new(prompt: Cow<'a, str>, settings: &'a RefCell<TUISettings>) -> Self {
         Self {
             settings,
-            annotators: AnnotatorsManager::new(),
             prompt,
         }
     }
 
-    pub fn register_annotator<T: Annotator + 'a>(&mut self, annotator: T) {
-        self.annotators.register_annotator(Box::new(annotator));
-    }
-
-    pub fn next_line(&mut self) -> Result<String, io::Error> {
-        if is_tty(&io::stdout()) {
+    pub fn next_line(&mut self) -> Result<Option<String>, io::Error> {
+        if true || atty::is(atty::Stream::Stdin) {
             self.next_line_interactive()
         } else {
             self.next_line_bulk()
         }
     }
-    fn next_line_bulk(&mut self) -> Result<String, io::Error> {
-        let mut line = String::new();
-        io::stdin().read_line(&mut line)?;
-        Ok(line)
+    fn next_line_bulk(&mut self) -> Result<Option<String>, io::Error> {
+        let input = stdin().lock();
+        let mut buf = Vec::with_capacity(30);
+
+        let mut read = 0;
+        for c in input.bytes() {
+            read += 1;
+            match c {
+                Err(e) => return Err(e),
+                Ok(0) | Ok(3) | Ok(4) => return Ok(None),
+                Ok(0x7f) => {
+                    buf.pop();
+                }
+                Ok(b'\n') | Ok(b'\r') => break,
+                Ok(c) => buf.push(c),
+            }
+        }
+
+        if read <= 0 { return Ok(None); }
+
+        let string = String::from_utf8(buf)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(Some(string))
     }
-    fn next_line_interactive(&mut self) -> Result<String, io::Error> {
+    fn next_line_interactive(&mut self) -> Result<Option<String>, io::Error> {
         let mut stdout = std::io::stdout().into_raw_mode().unwrap();
         write!(stdout, "{}", self.prompt).unwrap();
         write!(stdout, "{}", CSIControlCodes::SetCursorStyle(CursorMode::SteadyBar)).unwrap();
@@ -128,6 +142,7 @@ impl<'a> TUI<'a> {
         macro_rules! print_line {
             () => {
                 {
+                    self.print_cursor_insight(&line, &mut stdout, cursor);
                     self.print_annotated_line(&line, &mut stdout, cursor);
                 }
             };
@@ -142,7 +157,7 @@ impl<'a> TUI<'a> {
                 Key::Char(c) if c == '\n' => {
                     write!(stdout, "\n\r").unwrap();
                     stdout.flush().unwrap();
-                    return Ok(line);
+                    return Ok(Some(line));
                 }
                 Key::Char(c) if c != '\n' => {
                     line.insert(cursor, c);
@@ -181,6 +196,33 @@ impl<'a> TUI<'a> {
         println!();
 
         panic!("Unreachable");
+    }
+
+    fn print_cursor_insight(&mut self, line: &str, stdout: &mut RawTerminal<Stdout>, cursor: usize) {
+        let tree = parse_line(line);
+        if tree.is_none() { return; }
+        let tree = tree.unwrap();
+
+        let mut nodes = Vec::new();
+        tree.collect(&mut nodes, |a| a.origin.span.start() <= cursor && a.origin.span.end() >= cursor);
+
+        let mut sink = AnnotationsSink::new();
+
+        for node in nodes {
+            if let Some(annotator) = downcast_to_annotator(node) {
+                annotator.annotate(node, &mut sink);
+            }
+        }
+        write!(stdout, "\r{}", CSIControlCodes::EraseInDisplay(0)).unwrap();
+        if !sink.completions.is_empty() {
+            write!(stdout, "\n\r").unwrap();
+            write!(stdout, "Completions: \n\r").unwrap();
+            for completion in sink.completions.iter() {
+                write!(stdout, "  {}\n\r", completion).unwrap();
+            }
+
+            write!(stdout, "{}\r", CSIControlCodes::CursorUp(sink.completions.len() + 2)).unwrap();
+        }
     }
 
     fn print_annotated_line(&self, line: &str, stdout: &mut RawTerminal<Stdout>, cursor: usize) {
@@ -245,7 +287,9 @@ impl<'a> TUI<'a> {
 
     fn run_annotator_on_node<'b>(&self, node: &'b PTNode<'b>) -> AnnotationsSink {
         let mut sink = AnnotationsSink::new();
-        self.annotators.annotate(node, &mut sink);
+        if let Some(annotator) = downcast_to_annotator(node) {
+            annotator.annotate(node, &mut sink);
+        }
 
         sink
     }

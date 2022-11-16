@@ -3,12 +3,13 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, write};
 use std::fs::File;
-use std::io::{Read, stderr, stdin, stdout, Write};
+use std::io::{ErrorKind, Read, stderr, stdin, stdout, Write};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use nix::libc::stat;
 use parse_display_derive::Display;
 use pipe::{PipeReader, PipeWriter};
+use fosh::error_printer::ErrorType;
 use crate::builtin::contributors::FilesContributor;
 use crate::builtin::engine::{Argument, Type, Value};
 use crate::builtin::engine::parse_tree::PTNodeId;
@@ -30,15 +31,29 @@ pub struct PseudoExecution<'a> {
     work: Option<Box<dyn for<'b> FnOnce() -> Result<EntityRef, EntityExecutionError> + 'a>>,
 }
 
+pub struct ProcessExecution {
+    child: Child,
+    node_id: PTNodeId,
+}
+
+impl ProcessExecution {
+    pub fn new(child: Child, node_id: PTNodeId) -> Self {
+        Self {
+            child,
+            node_id,
+        }
+    }
+}
+
 pub struct Callee {
     pub arguments: Vec<Argument>,
-    pub callee: Box<dyn for<'b> Fn(&'b [EntityRef], ExecutionConfig) -> Result<Box<dyn Execution<'b> + 'b>, EntityExecutionError>>,
-    pub result_prototype: Option<EntityRef>,
+    pub callee: Box<dyn for<'b> Fn(EntityRef, &'b [EntityRef], ExecutionConfig) -> Result<Box<dyn Execution<'b> + 'b>, EntityExecutionError>>,
+    pub result_prototype: Option<Box<dyn Fn(EntityRef, &[Option<EntityRef>]) -> Option<EntityRef>>>,
 }
 
 impl Callee {
     pub fn new<F>(block: F) -> Self
-        where F: for<'b> Fn(&'b [EntityRef], ExecutionConfig) -> Result<Box<(dyn Execution<'b> + 'b)>, EntityExecutionError> + 'static
+        where F: for<'b> Fn(EntityRef, &'b [EntityRef], ExecutionConfig) -> Result<Box<(dyn Execution<'b> + 'b)>, EntityExecutionError> + 'static
     {
         Self {
             arguments: vec![],
@@ -53,7 +68,7 @@ impl Callee {
     {
         Self {
             arguments: vec![],
-            callee: Box::new(move |args, mut config| {
+            callee: Box::new(move |_me, args, mut config| {
                 let execution = PseudoExecution::from(move || {
                     let mut stdin = stdin();
                     let mut stdout = stdout();
@@ -75,8 +90,10 @@ impl Callee {
         self
     }
 
-    pub fn with_result_prototype(mut self, prototype: EntityRef) -> Self {
-        self.result_prototype = Some(prototype);
+    pub fn with_result_prototype<F>(mut self, prototype: F) -> Self
+    where F : Fn(EntityRef, &[Option<EntityRef>]) -> Option<EntityRef> + 'static
+    {
+        self.result_prototype = Some(Box::new(prototype));
         self
     }
 }
@@ -100,9 +117,9 @@ impl<'b> Execution<'b> for PseudoExecution<'b> {
 }
 
 
-impl<'b> Execution<'b> for Child {
+impl<'b> Execution<'b> for ProcessExecution {
     fn execute(&mut self) -> Result<EntityRef, EntityExecutionError> {
-        let status = self.wait().map_err(|x| x.to_string().into())?;
+        let status = self.child.wait().map_err(|x| EntityExecutionError::new_single(self.node_id, ErrorType::Execution, format!("{:?}", x)))?;
         Ok(
             entities()
                 .make_entity("Execution result".to_string())
@@ -112,39 +129,53 @@ impl<'b> Execution<'b> for Child {
 }
 
 #[derive(Debug)]
+pub struct ErrorData {
+    pub kind: ErrorType,
+    pub hints: Vec<String>,
+    pub notes: Vec<String>
+}
+
+impl ErrorData {
+    pub fn new(kind: ErrorType) -> Self {
+        Self {
+            kind,
+            hints: vec![],
+            notes: vec![],
+        }
+    }
+
+    pub fn with_hints(&mut self, hints: Vec<String>) -> &mut Self {
+        self.hints = hints;
+        self
+    }
+
+    pub fn with_notes(&mut self, notes: Vec<String>) -> &mut Self {
+        self.notes = notes;
+        self
+    }
+}
+
+#[derive(Debug)]
 pub struct EntityExecutionError {
-    general: Option<String>,
-    errors: HashMap<PTNodeId, Vec<String>>,
+    pub errors: HashMap<PTNodeId, ErrorData>,
 }
 
 impl EntityExecutionError {
     pub fn new() -> Self {
         Self {
-            general: None,
             errors: HashMap::new(),
         }
     }
 
-    pub fn with_general_error<S: Into<String>>(mut self, error: S) -> Self {
-        self.general = Some(error.into());
-        self
+    pub fn new_single<S : Into<String>>(node_id: PTNodeId, kind: ErrorType, note: S) -> Self {
+        let mut r = Self::new();
+        r.with_error(node_id, kind).with_notes(vec![note.into()]);
+        r
     }
 
-    pub fn with_error<S: Into<String>>(mut self, node_id: PTNodeId, error: S) -> Self {
-        self.errors.entry(node_id).or_insert(Vec::new()).push(error.into());
-        self
-    }
-}
-
-impl Into<EntityExecutionError> for String {
-    fn into(self) -> EntityExecutionError {
-        EntityExecutionError::new().with_general_error(self)
-    }
-}
-
-impl Into<EntityExecutionError> for &str {
-    fn into(self) -> EntityExecutionError {
-        EntityExecutionError::new().with_general_error(self)
+    pub fn with_error(&mut self, node_id: PTNodeId, kind: ErrorType) -> &mut ErrorData {
+        self.errors.insert(node_id, ErrorData::new(kind));
+        return self.errors.get_mut(&node_id).unwrap();
     }
 }
 
@@ -295,4 +326,3 @@ impl EntitiesManager {
     }
 
 }
-

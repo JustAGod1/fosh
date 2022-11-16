@@ -1,145 +1,79 @@
 use std::ops::Index;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use crate::builtin::engine::annotator::{Annotator, AnnotatorContext};
+use crate::builtin::engine::annotator::{AnnotationsSink, Annotator, AnnotatorContext};
 use crate::builtin::engine::entities::{EntitiesManager, FoshEntity};
 use crate::builtin::engine::parse_tree::PTNode;
-use crate::builtin::engine::Value;
-use crate::parser::ast::{ASTKind, Identifier, NumberLiteral, ParenthesizedArgumentsList, PropertyCall, StringLiteral};
+use crate::builtin::engine::{Type, Value};
+use crate::entities;
+use crate::parser::ast::{ASTKind, downcast_to_typed, Identifier, NumberLiteral, Parameter, ParenthesizedArgumentsList, PropertyCall, PropertyName, StringLiteral, Typed};
 
-pub struct PathAnnotator {
-    names: Arc<Mutex<Vec<String>>>,
-}
-
-impl Annotator for PathAnnotator {
-    fn annotate<'a>(&self, node: &'a PTNode<'a>, context: &mut AnnotatorContext) {
-        if node.kind != ASTKind::CommandName {
-            return;
-        }
-        let names = self.names.lock().unwrap();
-        let mut result = Vec::new();
-
-        let text = node.text();
-        for name in names.iter() {
-            if name.starts_with(text) {
-                result.push(name.clone());
-                if result.len() >= 5 { break; }
-            }
-        }
-
-        for x in result {
-            context.sink.completions.push(x)
-        }
+pub fn downcast_to_annotator<'a>(node: &'a PTNode<'a>) -> Option<&'a dyn Annotator> {
+    match node.kind {
+        ASTKind::Parameter => Some(node.value::<Parameter>()),
+        ASTKind::PropertyName => Some(node.value::<PropertyName>()),
+        _ => None
     }
 }
 
-impl PathAnnotator {
-    pub fn new() -> Self {
-        let r = Self {
-            names: Default::default(),
-        };
-        let arc = r.names.clone();
-        std::thread::spawn(move || {
-            Self::update_cache(arc)
-        });
-
-        return r;
-    }
-
-    fn update_cache(weak: Arc<Mutex<Vec<String>>>) {
-        if let Some(v) = std::env::var_os("PATH").map(|v| v.to_string_lossy().to_string()) {
-            for x in v.split(":") {
-                if let Ok(v) = std::fs::read_dir(x) {
-                    for entry in v {
-                        if let Ok(entry) = entry {
-                            if let Ok(name) = entry.file_name().into_string() {
-                                if let Ok(meta) = entry.metadata() {
-                                    if meta.file_type().is_file() {
-                                        let mut names = weak.lock().unwrap();
-                                        names.push(name);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-pub struct EntitiesAnnotator<'a> {
-    entities: &'a EntitiesManager,
-}
-
-impl <'a>EntitiesAnnotator<'a> {
-    pub fn new(entities: &'a EntitiesManager) -> Self {
-        Self {
-            entities,
-        }
-    }
-}
-
-impl Annotator for EntitiesAnnotator<'_> {
-
-    fn annotate<'a>(&self, node: &'a PTNode<'a>, context: &mut AnnotatorContext) {
-        if node.kind != ASTKind::PropertyName {
-            return;
-        }
-
-        let insn = node.parent().unwrap();
-        assert_eq!(insn.kind, ASTKind::PropertyInsn);
-        if node.position() == 0 {
-            let prompt = node.text();
-            self.entities.global().borrow().properties().keys().filter(|x| x.starts_with(prompt)).for_each(|x| {
-                context.sink.completions.push(x.to_string());
-            });
+impl Annotator for PropertyName {
+    fn annotate<'a>(&self, node: &'a PTNode<'a>, sink: &mut AnnotationsSink) {
+        let parent = node.parent().unwrap();
+        let left =
+        if parent.children().len() > 1 {
+            downcast_to_typed(parent.children()[0]).unwrap().infer_value(parent.children()[0])
         } else {
+            Some(entities().global())
+        };
+        if left.is_none() { return; }
+        let left = left.unwrap();
+        let left = left.borrow();
+        let properties = left.properties();
 
+        let text = node.data;
+
+        for x in properties.keys() {
+            if x.starts_with(text) {
+                sink.completions.push(x.to_string());
+            }
         }
-
     }
 }
 
+impl Annotator for Parameter {
+    fn annotate<'a>(&self, node: &'a PTNode<'a>, sink: &mut AnnotationsSink) {
+        let idx = node.position();
 
-#[cfg(test)]
-pub mod tests {
-    use crate::builtin::annotator::PathAnnotator;
-    use crate::builtin::contributors::FilesContributor;
-    use crate::builtin::engine::annotator::AnnotationsSink;
-    use crate::builtin::engine::annotator::tests::get_annotations;
-    use crate::builtin::engine::entities::EntitiesManager;
-    use crate::ui::settings::ColorType;
+        // Property call
+        let parent = node.parent().unwrap().parent().unwrap();
+        let left = parent.children()[0];
+        let left = downcast_to_typed(left).unwrap().infer_value(left);
+        if left.is_none() { return; }
+        let left = left.unwrap();
+        let left = left.borrow();
+        let callee = left.callee().as_ref();
+        if callee.is_none() { return; }
+        let callee = callee.unwrap();
 
-    pub fn annotate_with_default(s: &str) -> AnnotationsSink {
-        let manager = EntitiesManager::new();
-        let annotator = PathAnnotator::new();
+        if idx >= callee.arguments.len() { return; }
+        let arg = &callee.arguments[idx];
 
-        get_annotations(s, vec![Box::new(annotator)])
-    }
+        let me = self.infer_value(node).unwrap();
+        let me_ref = me.borrow();
 
-    #[test]
-    fn global() {
-        let annotations = annotate_with_default("$ lo^l");
-        assert_eq!(annotations.colors(), &vec![ColorType::Error]);
+        let value = if me_ref.implicits().contains_key(&Type::Number) {
+            me_ref.implicits()[&Type::Number]()
+        } else if me_ref.implicits().contains_key(&Type::String){
+            me_ref.implicits()[&Type::String]()
+        } else {
+            me.clone().into()
+        };
+
+        arg.contributor.contribute(value)
+            .iter()
+            .for_each(|a| sink.completions.push(a.to_string()));
 
 
-        let annotations = annotate_with_default("$ ^c");
-        assert_eq!(annotations.colors(), &vec![ColorType::Error]);
-        assert_eq!(annotations.completions(), &vec!["cd".to_string()]);
-    }
 
-    #[test]
-    fn test_ill_format() {
-        let annotations = annotate_with_default(r#"$ c^d("fk")."#);
-
-        assert_eq!(annotations.colors(), &vec![]);
-    }
-
-    #[test]
-    fn test_error_complete() {
-        let annotations = annotate_with_default(r#"$^"#);
-
-        assert_eq!(annotations.colors(), &vec![]);
     }
 }

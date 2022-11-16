@@ -86,8 +86,13 @@ PropertyCall : (PropertyCall, Vec<ASTNode>) = {
     => (PropertyCall::new(), vec![insn, args])
 }
 
+ParameterNode : ASTNode = {<NodeParent<Parameter>>}
+Parameter : (Parameter, Vec<ASTNode>) = {
+       <value: Value> => (Parameter::new(), vec![value]),
+}
+
 ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
-    <l: Node<OpenParen>> <args: Value*> <r: Node<CloseParen>> => {
+    <l: Node<OpenParen>> <args: ParameterNode*> <r: Node<CloseParen>> => {
         let mut result = Vec::new();
         result.push(l);
         result.extend(args);
@@ -96,7 +101,7 @@ ParenthesizedArgumentsList : (ParenthesizedArgumentsList, Vec<ASTNode>) = {
         (ParenthesizedArgumentsList::new(), result)
     },
 
-    <l: Node<OpenParen>> <args: Value*> <ll: @L><err: !><rr: @R> => {
+    <l: Node<OpenParen>> <args: ParameterNode*> <ll: @L><err: !><rr: @R> => {
         let mut result = Vec::new();
         result.push(l);
         result.extend(args);

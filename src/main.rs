@@ -16,10 +16,11 @@ use termion::event::Key;
 use termion::input::{TermRead};
 use termion::is_tty;
 use termion::raw::IntoRawMode;
-use crate::builtin::annotator::{EntitiesAnnotator, PathAnnotator};
-use crate::builtin::engine::entities::{EntitiesManager, EntityRef};
-use crate::builtin::engine::parse_tree::parse_line;
+use fosh::error_printer::ErrorReport;
+use crate::builtin::engine::entities::{EntitiesManager, EntityExecutionError, EntityRef};
+use crate::builtin::engine::parse_tree::{parse_line, PTNode};
 use crate::builtin::entities::initialize_universe;
+use crate::parser::ast::ASTKind;
 use crate::runtime::execution::execute;
 use crate::ui::settings::TUISettings;
 use crate::ui::tui::TUI;
@@ -43,6 +44,31 @@ pub fn entities() -> &'static EntitiesManager {
     }
 }
 
+fn construct_error_report<'a, 'b>(s: &'b str, root: &'a PTNode<'a>, error: EntityExecutionError) -> Vec<ErrorReport<'b>> {
+    let mut reports = Vec::new();
+
+    for (node_id, msg) in error.errors {
+        let node = root.find_node(node_id).unwrap();
+        let mut report = ErrorReport::new(
+            node.origin.span.as_range(),
+            s,
+            msg.kind
+        );
+
+        for note in msg.notes {
+            report.add_note(note);
+        }
+
+        for hint in msg.hints {
+            report.add_hint(hint);
+        }
+
+        reports.push(report);
+    }
+
+    reports
+}
+
 fn main() {
 
     if is_tty(&stdin()) {
@@ -59,21 +85,30 @@ fn main() {
 
     initialize_universe(entities());
 
-    let mut tui = TUI::new("$ ".into(), &settings);
+    let mut tui = TUI::new(">> ".into(), &settings);
 
-    tui.register_annotator(PathAnnotator::new());
-    tui.register_annotator(EntitiesAnnotator::new(entities()));
 
     loop {
         let line = tui.next_line().unwrap();
+        if line.is_none() { break; }
+        let line = line.unwrap();
+        if line.is_empty() { continue; }
         let tree = parse_line(&line).unwrap();
+
+        if tree.root().find_child_with_kind_rec(ASTKind::Error).is_some() {
+            println!("Syntax error");
+            continue;
+        }
 
         match execute(tree.root(), &tui) {
             Ok(entity) => {
                 println!("Entity: {}", entity.borrow());
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                let reports = construct_error_report(&line, tree.root(), err);
+                for report in reports {
+                    println!("{}", report);
+                }
             }
         }
     }

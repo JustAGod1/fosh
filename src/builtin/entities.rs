@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::rc::Rc;
 use pipe::{PipeReader, PipeWriter};
 use crate::builtin::contributors::FilesContributor;
-use crate::builtin::engine::{Argument, Type};
+use crate::builtin::engine::{Argument, Type, Value};
 use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, FoshEntity, EntityRef, implicit_type};
 use crate::entities;
 
@@ -25,7 +25,11 @@ fn make_cd(manager: &'static EntitiesManager) -> EntityRef {
                 name: "path".to_string(),
                 ty: Type::String,
                 contributor: &manager.files_contributor,
-            }])
+            }]).with_result_prototype(
+                move |_, _| {
+                    Some(entities().make_entity("cd success".to_string()).with_property("path", Into::<Value>::into("kek".to_string()).into_entity()))
+                }
+            )
         )
 }
 

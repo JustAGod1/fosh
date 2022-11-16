@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
+use fosh::error_printer::ErrorType;
 use crate::builtin::engine::parse_tree::PTNode;
 use crate::parser::ast::{ASTKind, downcast_to_typed};
 use crate::{entities, EntitiesManager, TUI};
@@ -42,15 +43,15 @@ fn execute_command_or_function<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result
         ASTKind::Command => {
             return match downcast_to_typed(command).unwrap().infer_value(command) {
                 None => {
-                    Err(EntityExecutionError::new().with_general_error("Could not infer execution value"))
+                    Err(EntityExecutionError::new_single(command.id(), ErrorType::Semantic,"Could not infer execution value"))
                 }
                 Some(e) => {
                     match RefCell::borrow(&e).callee() {
                         None => {
-                            Err(EntityExecutionError::new().with_general_error(format!("No callee for command {}", command.data)))
+                            Err(EntityExecutionError::new_single(command.id(), ErrorType::Semantic,"No callee"))
                         }
                         Some(exe) => {
-                            match (exe.callee)(&[], ExecutionConfig {
+                            match (exe.callee)(e.clone(), &[], ExecutionConfig {
                                 std_in: None,
                                 std_out: None,
                                 std_err: None,
@@ -113,7 +114,7 @@ fn execute_property_insn<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<Entit
     let x = RefCell::borrow(&left);
     match x.properties().get(name.data) {
         None => {
-            Err(EntityExecutionError::new().with_error(name.id(), format!("No property named {} in {}", name.data, left.name())))
+            Err(EntityExecutionError::new_single(command.id(), ErrorType::Semantic, format!("Property {} does not exist in {}", name.data, left.name())))
         }
         Some(e) => {
             Ok(e.clone())
@@ -126,18 +127,18 @@ fn execute_property_call<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<Entit
 
     let mut args = Vec::new();
     for x in parenthesis.children().iter().skip(1) {
-        if downcast_to_typed(x).is_some() {
-            args.push(execute_value(x, tui)?);
+        if x.kind == ASTKind::Parameter {
+            args.push(execute_value(x.children()[0], tui)?);
         }
     }
 
     let x = RefCell::borrow(&left);
     match x.callee() {
         None => {
-            Err(EntityExecutionError::new().with_general_error(format!("No callee for property {}", left.name())))
+            Err(EntityExecutionError::new_single(command.id(), ErrorType::Semantic, format!("Property {} is not callable", left.name())))
         }
         Some(exe) => {
-            match (exe.callee)(&args, ExecutionConfig {
+            match (exe.callee)(left.clone(), &args, ExecutionConfig {
                 std_in: None,
                 std_out: None,
                 std_err: None,
@@ -168,7 +169,7 @@ fn execute_braced_command<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<Enti
 fn execute_primitive<'a>(command: &'a PTNode<'a>) -> Result<EntityRef, EntityExecutionError> {
     return match downcast_to_typed(command).unwrap().infer_value(command) {
         None => {
-            Err(EntityExecutionError::new().with_error(command.id(), "Cannot infer value"))
+            Err(EntityExecutionError::new_single(command.id(), ErrorType::Semantic,"Could not infer value"))
         }
         Some(e) => Ok(e)
     };

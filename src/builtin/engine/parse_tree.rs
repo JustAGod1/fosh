@@ -34,18 +34,18 @@ impl<'a> PTNode<'a> {
                 Some(self)
             } else {
                 None
-            }
+            };
         }
 
         for child in self.children.borrow().iter() {
             let v = child.find_leaf_on_pos(pos);
-            if v.is_some() { return v;}
+            if v.is_some() { return v; }
         }
 
         return None;
     }
 
-    pub fn walk<F>(&'a self, visitor: &mut F) where F : FnMut(&'a PTNode<'a>) {
+    pub fn walk<F>(&'a self, visitor: &mut F) where F: FnMut(&'a PTNode<'a>) {
         visitor(self);
         for child in Deref::deref(&self.children.borrow()) {
             child.walk(visitor);
@@ -70,7 +70,7 @@ impl<'a> PTNode<'a> {
         }
         for child in self.children.borrow().iter() {
             let v = child.find_child_with_kind_rec(kind);
-            if v.is_some() { return v;}
+            if v.is_some() { return v; }
         }
         return None;
     }
@@ -96,11 +96,22 @@ impl<'a> PTNode<'a> {
         }
         return self.parent.get().unwrap().find_parent_with_kind(kind);
     }
+    
+    pub fn find_node(&'a self, id: PTNodeId) -> Option<&'a PTNode<'a>> {
+        if self.id == id {
+            return Some(self);
+        }
+        for child in self.children.borrow().iter() {
+            let v = child.find_node(id);
+            if v.is_some() { return v; }
+        }
+        return None;
+    }
+    
     pub fn position(&self) -> usize {
         self.position
     }
 }
-
 
 
 pub struct ParseTree<'a> {
@@ -109,14 +120,13 @@ pub struct ParseTree<'a> {
     ast: ASTNode,
 }
 
-impl <'a>ParseTree<'a> {
-
+impl<'a> ParseTree<'a> {
     pub fn new(command: &'a str, ast: ASTNode) -> Self {
         let builder = ParseTreeBuilder::new(command);
         let result = Self {
             builder,
             ast,
-            root: Default::default()
+            root: Default::default(),
         };
 
 
@@ -128,6 +138,15 @@ impl <'a>ParseTree<'a> {
             self.root.set(Some(self.builder.parse_ast(&self.ast)));
         }
         self.root.get().unwrap()
+    }
+
+    pub fn collect<F>(&'a self, container: &mut Vec<&'a PTNode<'a>>, predicate: F)
+        where F: Fn(&'a PTNode<'a>) -> bool {
+        self.root().walk(&mut |node| {
+            if predicate(node) {
+                container.push(node);
+            }
+        });
     }
 }
 
@@ -161,7 +180,7 @@ impl<'a> ParseTreeBuilder<'a> {
             parent: Default::default(),
             children: Default::default(),
             position,
-            id: PTNodeId(id)
+            id: PTNodeId(id),
         });
 
         let mut pos = 0usize;
@@ -175,7 +194,6 @@ impl<'a> ParseTreeBuilder<'a> {
 
         (node, id)
     }
-
 }
 
 pub fn parse_line(line: &str) -> Option<ParseTree> {
