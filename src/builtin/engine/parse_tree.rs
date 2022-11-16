@@ -1,4 +1,5 @@
-use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::borrow::Borrow;
+use std::cell::{Cell, Ref, RefCell, RefMut, UnsafeCell};
 use std::ops::Deref;
 use typed_arena::Arena;
 use crate::parser;
@@ -8,6 +9,7 @@ use crate::parser::ast::{ASTKind, ASTNode, ASTValue, ASTError};
 pub struct PTNodeId(usize);
 
 pub struct PTNode<'a> {
+    root: UnsafeCell<Option<&'a PTNode<'a>>>,
     pub data: &'a str,
     pub kind: ASTKind,
     pub origin: &'a ASTNode,
@@ -23,6 +25,10 @@ impl<'a> PTNode<'a> {
         return self.data;
     }
 
+
+    pub fn root(&self) -> &'a PTNode<'a> {
+        unsafe { &*self.root.get()}.unwrap()
+    }
 
     pub fn id(&self) -> PTNodeId {
         self.id
@@ -96,7 +102,7 @@ impl<'a> PTNode<'a> {
         }
         return self.parent.get().unwrap().find_parent_with_kind(kind);
     }
-    
+
     pub fn find_node(&'a self, id: PTNodeId) -> Option<&'a PTNode<'a>> {
         if self.id == id {
             return Some(self);
@@ -107,7 +113,7 @@ impl<'a> PTNode<'a> {
         }
         return None;
     }
-    
+
     pub fn position(&self) -> usize {
         self.position
     }
@@ -163,17 +169,18 @@ impl<'a> ParseTreeBuilder<'a> {
         }
     }
     fn parse_ast(&'a self, ast: &'a ASTNode) -> &'a PTNode<'a> {
-        return self.parse_node(ast, 0, 0).0;
+        return self.parse_node(ast, 0, 0, None).0;
     }
 
 
-    fn parse_node(&'a self, node: &'a ASTNode, position: usize, id: usize) -> (&'a PTNode<'a>, usize) {
+    fn parse_node(&'a self, node: &'a ASTNode, position: usize, id: usize, mut root: Option<&'a PTNode<'a>>) -> (&'a PTNode<'a>, usize) {
         let mut id = id;
         let kind = match node.value.kind() {
             ASTKind::Error => node.value.downcast_ref::<ASTError>().unwrap().expected.kind(),
             _ => node.value.kind()
         };
         let node: &'a mut PTNode = self.arena.alloc(PTNode {
+            root: root.into(),
             data: node.span.slice(self.data),
             kind,
             origin: node,
@@ -183,9 +190,12 @@ impl<'a> ParseTreeBuilder<'a> {
             id: PTNodeId(id),
         });
 
+        let node_root: &mut Option<&'a PTNode<'a>> = unsafe { std::mem::transmute(node.root.get())  };
+        if node_root.is_none() { *node_root = Some(node); root = Some(node); }
+
         let mut pos = 0usize;
         for child in &node.origin.children {
-            let (child_node, new_id) = self.parse_node(child, pos, id + 1);
+            let (child_node, new_id) = self.parse_node(child, pos, id + 1, root.clone());
             id = new_id + 1;
             child_node.parent.set(Some(node));
             node.children.borrow_mut().push(child_node);

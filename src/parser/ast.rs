@@ -327,8 +327,7 @@ impl Typed for StringLiteral {
 
 
         return
-            Some(entities().make_entity(result.clone())
-                .with_implicit(Type::String, move || result.clone()));
+            Some(Value::String(result).into_entity());
     }
 }
 
@@ -336,10 +335,7 @@ impl Typed for NumberLiteral {
     fn infer_value<'a>(&self, pt: &'a PTNode<'a>) -> Option<EntityRef> {
         Some(pt.data.parse::<f64>()
             .map_err(|e| e.to_string())
-            .map(|x| entities()
-                .make_entity(x.to_string())
-                .with_implicit(Type::Number, move || x)
-            )
+            .map(|x| Value::Number(x).into_entity())
             .unwrap()
         )
     }

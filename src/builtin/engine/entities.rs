@@ -12,7 +12,7 @@ use pipe::{PipeReader, PipeWriter};
 use fosh::error_printer::ErrorType;
 use crate::builtin::contributors::FilesContributor;
 use crate::builtin::engine::{Argument, Type, Value};
-use crate::builtin::engine::parse_tree::PTNodeId;
+use crate::builtin::engine::parse_tree::{PTNode, PTNodeId};
 use crate::entities;
 
 pub type EntityRef = Rc<RefCell<Entity>>;
@@ -21,14 +21,15 @@ pub struct ExecutionConfig {
     pub std_in: Option<File>,
     pub std_out: Option<File>,
     pub std_err: Option<File>,
+    pub pt: PTNodeId
 }
 
-pub trait Execution<'a> {
+pub trait Execution {
     fn execute(&mut self) -> Result<EntityRef, EntityExecutionError>;
 }
 
-pub struct PseudoExecution<'a> {
-    work: Option<Box<dyn for<'b> FnOnce() -> Result<EntityRef, EntityExecutionError> + 'a>>,
+pub struct PseudoExecution {
+    work: Option<Box<dyn FnOnce() -> Result<EntityRef, EntityExecutionError>>>,
 }
 
 pub struct ProcessExecution {
@@ -47,13 +48,13 @@ impl ProcessExecution {
 
 pub struct Callee {
     pub arguments: Vec<Argument>,
-    pub callee: Box<dyn for<'b> Fn(EntityRef, &'b [EntityRef], ExecutionConfig) -> Result<Box<dyn Execution<'b> + 'b>, EntityExecutionError>>,
+    pub callee: Box<dyn Fn(EntityRef, &[EntityRef], ExecutionConfig) -> Result<Box<dyn Execution>, EntityExecutionError>>,
     pub result_prototype: Option<Box<dyn Fn(EntityRef, &[Option<EntityRef>]) -> Option<EntityRef>>>,
 }
 
 impl Callee {
     pub fn new<F>(block: F) -> Self
-        where F: for<'b> Fn(EntityRef, &'b [EntityRef], ExecutionConfig) -> Result<Box<(dyn Execution<'b> + 'b)>, EntityExecutionError> + 'static
+        where F: for<'b> Fn(EntityRef, &'b [EntityRef], ExecutionConfig) -> Result<Box<(dyn Execution)>, EntityExecutionError> + 'static
     {
         Self {
             arguments: vec![],
@@ -63,12 +64,13 @@ impl Callee {
     }
 
     pub fn new_pseudo_execution<F>(block: F) -> Callee
-        where F: 'static + FnOnce(&[EntityRef], &mut dyn Read, &mut dyn Write, &mut dyn Write)
+        where F: 'static + FnOnce(PTNodeId, &[EntityRef], &mut dyn Read, &mut dyn Write, &mut dyn Write)
             -> Result<EntityRef, EntityExecutionError> + Copy
     {
         Self {
             arguments: vec![],
             callee: Box::new(move |_me, args, mut config| {
+                let entities = args.iter().map(|a| a.clone()).collect::<Vec<_>>();
                 let execution = PseudoExecution::from(move || {
                     let mut stdin = stdin();
                     let mut stdout = stdout();
@@ -77,7 +79,7 @@ impl Callee {
                     let mut stdout = config.std_out.as_mut().map(|a| a as &mut dyn Write).unwrap_or_else(|| &mut stdout);
                     let mut stdin = config.std_in.as_mut().map(|a| a as &mut dyn Read).unwrap_or_else(|| &mut stdin);
 
-                    block(args, &mut stdin, &mut stdout, &mut stderr)
+                    block(config.pt, &entities, &mut stdin, &mut stdout, &mut stderr)
                 });
                 Ok(Box::new(execution))
             }),
@@ -98,9 +100,9 @@ impl Callee {
     }
 }
 
-impl<'a> PseudoExecution<'a> {
+impl PseudoExecution {
     pub fn from<F>(work: F) -> Self
-        where F: FnOnce() -> Result<EntityRef, EntityExecutionError> + 'a, F: 'a
+        where F: FnOnce() -> Result<EntityRef, EntityExecutionError> + 'static
     {
         Self {
             work: Some(Box::new(work))
@@ -108,7 +110,7 @@ impl<'a> PseudoExecution<'a> {
     }
 }
 
-impl<'b> Execution<'b> for PseudoExecution<'b> {
+impl Execution for PseudoExecution {
     fn execute(&mut self) -> Result<EntityRef, EntityExecutionError> {
         let mut work = None::<_>;
         std::mem::swap(&mut work, &mut self.work);
@@ -117,7 +119,7 @@ impl<'b> Execution<'b> for PseudoExecution<'b> {
 }
 
 
-impl<'b> Execution<'b> for ProcessExecution {
+impl Execution for ProcessExecution {
     fn execute(&mut self) -> Result<EntityRef, EntityExecutionError> {
         let status = self.child.wait().map_err(|x| EntityExecutionError::new_single(self.node_id, ErrorType::Execution, format!("{:?}", x)))?;
         Ok(
@@ -182,7 +184,7 @@ impl EntityExecutionError {
 pub struct Entity {
     name: String,
 
-    implicits: HashMap<Type, Box<dyn Fn() -> Value +'static>>,
+    implicits: HashMap<Type, Box<dyn Fn(EntityRef) -> Value +'static>>,
     callee: Option<Box<Callee>>,
 
     properties: HashMap<String, EntityRef>,
@@ -221,7 +223,7 @@ pub struct Comms<'a> {
 
 impl Entity {
 
-    pub fn implicits(&self) -> &HashMap<Type, Box<dyn Fn() -> Value + 'static>> {
+    pub fn implicits(&self) -> &HashMap<Type, Box<dyn Fn(EntityRef) -> Value + 'static>> {
         &self.implicits
     }
     pub fn callee(&self) -> &Option<Box<Callee>> {
@@ -252,10 +254,36 @@ impl FoshEntity for EntityRef {
         self.borrow_mut().properties.insert(name.to_string(), property);
     }
     fn with_implicit<F, V>(mut self, type_: Type, implicit: F) -> Self
-        where F: Fn() -> V, F: 'static, V: Into<Value>
+        where F: Fn(EntityRef) -> V, F: 'static, V: Into<Value>
     {
-        self.borrow_mut().implicits.insert(type_, Box::new(move || implicit().into()));
+        self.borrow_mut().implicits.insert(type_, Box::new(move |e| implicit(e).into()));
         self
+    }
+
+    fn try_as_string(&self) -> Option<String> {
+        let r = self.borrow();
+
+        if let Some(x) = r.implicits.get(&Type::String) {
+            if let Value::String(x) = x(self.clone()) {
+                return Some(x);
+            } else {
+                panic!("Implicit string is not a string");
+            }
+        }
+        return None;
+    }
+
+    fn try_as_number(&self) -> Option<f64> {
+        let r = self.borrow();
+
+        if let Some(x) = r.implicits.get(&Type::Number) {
+            if let Value::Number(x) = x(self.clone()) {
+                return Some(x);
+            } else {
+                panic!("Implicit number is not a number");
+            }
+        }
+        return None;
     }
 }
 
@@ -265,20 +293,11 @@ pub trait FoshEntity {
     fn with_property(self, name: &str, property: EntityRef) -> Self;
     fn add_property(&mut self, name: &str, property: EntityRef);
     fn with_implicit<F, V>(self, type_: Type, implicit: F) -> Self
-        where F: Fn() -> V, F: 'static, V: Into<Value>
-    ;
+        where F: Fn(EntityRef) -> V, F: 'static, V: Into<Value>;
+
+    fn try_as_string(&self) -> Option<String>;
+    fn try_as_number(&self) -> Option<f64>;
 }
-
-pub fn implicit_type(typ: Type, entity: Option<&Entity>) -> Option<Value> {
-    if entity.is_none() { return None; }
-    let entity = entity.unwrap();
-
-    let implicit = entity.implicits.get(&typ);
-    if implicit.is_none() { return None; }
-    let implicit = implicit.unwrap();
-    Some(implicit())
-}
-
 
 pub struct EntitiesManager {
     pub files_contributor: FilesContributor,

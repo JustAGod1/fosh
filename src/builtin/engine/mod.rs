@@ -50,8 +50,8 @@ impl Value {
     pub fn into_entity(self) -> EntityRef {
         match self {
             Value::Entity(e) => e,
-            Value::String(s) => entities().make_entity(s.clone()).with_implicit(Type::String, move || s.clone()),
-            Value::Number(n) => entities().make_entity(format!("{}", n)).with_implicit(Type::Number, move || n),
+            Value::String(s) => entities().make_entity(s.clone()).with_implicit(Type::String, move |e| s.clone()),
+            Value::Number(n) => entities().make_entity(format!("{}", n)).with_implicit(Type::Number, move |e| n),
         }
     }
 
@@ -61,7 +61,7 @@ impl Value {
 #[derive(Clone)]
 pub struct Argument {
     pub name: String,
-    pub ty: Type,
+    pub possible_types: Vec<Type>,
     pub contributor: &'static dyn Contributor
 }
 

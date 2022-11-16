@@ -62,9 +62,9 @@ impl Annotator for Parameter {
         let me_ref = me.borrow();
 
         let value = if me_ref.implicits().contains_key(&Type::Number) {
-            me_ref.implicits()[&Type::Number]()
+            me_ref.implicits()[&Type::Number](me.clone())
         } else if me_ref.implicits().contains_key(&Type::String){
-            me_ref.implicits()[&Type::String]()
+            me_ref.implicits()[&Type::String](me.clone())
         } else {
             me.clone().into()
         };

@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::Range;
 
 #[derive(parse_display_derive::Display)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ErrorType {
     Syntax,
     Semantic,

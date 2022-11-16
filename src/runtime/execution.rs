@@ -3,31 +3,56 @@ use std::cell::RefCell;
 use fosh::error_printer::ErrorType;
 use crate::builtin::engine::parse_tree::PTNode;
 use crate::parser::ast::{ASTKind, downcast_to_typed};
-use crate::{entities, EntitiesManager, TUI};
-use crate::builtin::engine::entities::{Entity, EntityExecutionError, EntityRef, Execution, ExecutionConfig, FoshEntity};
-use crate::builtin::engine::Value;
+use crate::{construct_error_report, entities, EntitiesManager, report, TUI};
+use crate::builtin::engine::entities::{Entity, EntityExecutionError, EntityRef, Execution, ExecutionConfig, FoshEntity, PseudoExecution};
+use crate::builtin::engine::{Argument, Value};
 
-pub fn execute<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+type ExecutionRef = Box<dyn Execution>;
+type FoshResult<A> = Result<A, EntityExecutionError>;
+
+pub fn execute<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     execute_delimited(command, tui)
 }
 
-fn execute_delimited<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+fn execute_delimited<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     if command.kind != ASTKind::Delimited {
         execute_sequenced(command, tui)
     } else {
-        Err(EntityExecutionError::new())
+        let children = command.children().iter()
+            .filter(|c| c.kind != ASTKind::SemiColon)
+            .map(|c| *c)
+            .collect::<Vec<_>>();
+
+        for node in 0..children.len() - 1 {
+            let r = execute_sequenced(children[node], tui);
+            if let Err(e) = &r {
+                report(command.root(), e);
+            }
+        }
+
+        execute_sequenced(children.last().unwrap(), tui)
     }
 }
 
-fn execute_sequenced<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+fn execute_sequenced<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     if command.kind != ASTKind::Sequenced {
         execute_piped(command, tui)
     } else {
-        Err(EntityExecutionError::new())
+        let children = command.children().iter()
+            .filter(|c| c.kind != ASTKind::SemiColon)
+            .map(|c| *c)
+            .collect::<Vec<_>>();
+
+        for node in 0..children.len() - 1 {
+            let r = execute_piped(children[node], tui);
+            if r.is_err() { return r; }
+        }
+
+        execute_piped(children.last().unwrap(), tui)
     }
 }
 
-fn execute_piped<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+fn execute_piped<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     if command.kind != ASTKind::Piped {
         execute_command_or_function(command, tui)
     } else {
@@ -35,7 +60,7 @@ fn execute_piped<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, En
     }
 }
 
-fn execute_command_or_function<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+fn execute_command_or_function<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     match command.kind {
         ASTKind::Function => {
             execute_function(command, tui)
@@ -55,6 +80,7 @@ fn execute_command_or_function<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result
                                 std_in: None,
                                 std_out: None,
                                 std_err: None,
+                                pt: command.id(),
                             }) {
                                 Ok(mut e) => {
                                     match e.execute() {
@@ -79,12 +105,12 @@ fn execute_command_or_function<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result
     }
 }
 
-fn execute_function<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+fn execute_function<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     let node = command.children()[1];
     execute_value(node, tui)
 }
 
-fn execute_value<'a>(node: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+fn execute_value<'a>(node: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     match node.kind {
         ASTKind::StringLiteral | ASTKind::NumberLiteral => {
             execute_primitive(node)
@@ -104,7 +130,7 @@ fn execute_value<'a>(node: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, Entit
     }
 }
 
-fn execute_property_insn<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+fn execute_property_insn<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     let (left, name) = if command.children().len() > 1 {
         (execute_value(command.children()[0], tui)?, command.children()[2])
     } else {
@@ -121,7 +147,18 @@ fn execute_property_insn<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<Entit
         }
     }
 }
-fn execute_property_call<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+
+fn validate_types(arg: Argument, value: &EntityRef) -> bool {
+    let r = RefCell::borrow(&value);
+    for x in arg.possible_types {
+        if r.implicits().contains_key(&x) { return true; }
+    }
+
+    return false;
+}
+
+fn property_call_execution<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<Box<dyn Execution>, EntityExecutionError> {
+
     let left = execute_property_insn(command.children()[0], tui)?;
     let parenthesis = command.children()[1];
 
@@ -138,20 +175,23 @@ fn execute_property_call<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<Entit
             Err(EntityExecutionError::new_single(command.id(), ErrorType::Semantic, format!("Property {} is not callable", left.name())))
         }
         Some(exe) => {
+            if exe.arguments.len() != args.len() {
+                return Err(EntityExecutionError::new_single(parenthesis.id(), ErrorType::Semantic, format!("Expected {} arguments, got {}", exe.arguments.len(), args.len())));
+            }
+            for i in 0..args.len() {
+                if !validate_types(exe.arguments[i].clone(), &args[i]) {
+                    return Err(EntityExecutionError::new_single(parenthesis.children()[1+i].id(), ErrorType::Semantic, format!("Argument is not of type {:?}", exe.arguments[i].possible_types[0])));
+                }
+            }
+
             match (exe.callee)(left.clone(), &args, ExecutionConfig {
                 std_in: None,
                 std_out: None,
                 std_err: None,
+                pt: command.id(),
             }) {
-                Ok(mut e) => {
-                    match e.execute() {
-                        Ok(entity) => {
-                            Ok(entity)
-                        }
-                        Err(err) => {
-                            Err(err)
-                        }
-                    }
+                Ok(e) => {
+                    return Ok(e);
                 }
                 Err(e) => {
                     Err(e)
@@ -159,14 +199,17 @@ fn execute_property_call<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<Entit
             }
         }
     }
-
 }
-fn execute_braced_command<'a>(command: &'a PTNode<'a>, tui: &TUI) -> Result<EntityRef, EntityExecutionError> {
+
+fn execute_property_call<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
+    property_call_execution(command, tui)?.execute()
+}
+fn execute_braced_command<'a>(command: &'a PTNode<'a>, tui: &TUI) -> FoshResult<EntityRef> {
     let node = command.children()[1];
     execute_delimited(node, tui)
 }
 
-fn execute_primitive<'a>(command: &'a PTNode<'a>) -> Result<EntityRef, EntityExecutionError> {
+fn execute_primitive<'a>(command: &'a PTNode<'a>) -> FoshResult<EntityRef> {
     return match downcast_to_typed(command).unwrap().infer_value(command) {
         None => {
             Err(EntityExecutionError::new_single(command.id(), ErrorType::Semantic,"Could not infer value"))
@@ -174,3 +217,4 @@ fn execute_primitive<'a>(command: &'a PTNode<'a>) -> Result<EntityRef, EntityExe
         Some(e) => Ok(e)
     };
 }
+
