@@ -9,16 +9,19 @@ mod runtime;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs::File;
 use nix::unistd;
 
-use std::io::{stdin, stdout, Write};
+use std::io::{stderr, stdin, stdout, Write};
+use std::os::unix::io::{AsRawFd, FromRawFd};
+use nix::libc::dup;
 use termion::event::Key;
 use termion::input::{TermRead};
 use termion::is_tty;
 use termion::raw::IntoRawMode;
 use fosh::error_printer::ErrorReport;
-use crate::builtin::engine::entities::{EntitiesManager, EntityExecutionError, EntityRef};
-use crate::builtin::engine::parse_tree::{parse_line, PTNode};
+use crate::builtin::engine::entities::{EntitiesManager, EntityExecutionError, EntityRef, ExecutionConfig};
+use crate::builtin::engine::parse_tree::{parse_line, PTNode, PTNodeId};
 use crate::builtin::entities::initialize_universe;
 use crate::parser::ast::ASTKind;
 use crate::runtime::execution::execute;
@@ -76,6 +79,7 @@ pub fn report<'a>(root: &'a PTNode<'a>, error: &EntityExecutionError) {
     }
 }
 
+
 fn main() {
 
     if is_tty(&stdin()) {
@@ -94,7 +98,6 @@ fn main() {
 
     let mut tui = TUI::new(">> ".into(), &settings);
 
-
     loop {
         let line = tui.next_line().unwrap();
         if line.is_none() { break; }
@@ -107,7 +110,13 @@ fn main() {
             continue;
         }
 
-        match execute(tree.root(), &tui) {
+        let config = ExecutionConfig {
+            std_in: None,
+            std_out: None,
+            std_err: None,
+            pt: tree.root().id()
+        };
+        match execute(tree.root(), &config).execute() {
             Ok(entity) => {
                 println!("Entity: {}", entity.borrow());
             }

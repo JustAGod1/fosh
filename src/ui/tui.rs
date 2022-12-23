@@ -129,7 +129,13 @@ impl<'a> TUI<'a> {
         Ok(Some(string))
     }
     fn next_line_interactive(&mut self) -> Result<Option<String>, io::Error> {
-        let mut stdout = std::io::stdout().into_raw_mode().unwrap();
+        let mut stdout = match std::io::stdout().into_raw_mode() {
+            Ok(o) => o,
+            Err(e) => {
+                let f = format!("Error: {:?}", e);
+                println!("{}", f);
+                panic!("Error: {:?}", e);},
+        };
         write!(stdout, "{}", self.prompt).unwrap();
         write!(stdout, "{}", CSIControlCodes::SetCursorStyle(CursorMode::SteadyBar)).unwrap();
         stdout.flush()?;

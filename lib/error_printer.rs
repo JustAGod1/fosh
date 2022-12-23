@@ -8,6 +8,8 @@ pub enum ErrorType {
     Syntax,
     Semantic,
     Execution,
+    CannotCreatePipe,
+    CannotCloneExecutionConfig
 }
 
 pub struct ErrorReport<'a> {

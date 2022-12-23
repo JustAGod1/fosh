@@ -22,6 +22,8 @@ rand = { version = "0.8.5" , features = ["small_rng"] }
 pipe = "0.4.0"
 parse-display-derive = "0.6.0"
 atty = "0.2.14"
+tokio = { version = "1.21.2", features = ["macros", "rt-multi-thread"] }
+futures = "0.3.25"
 
 
 [[bin]]

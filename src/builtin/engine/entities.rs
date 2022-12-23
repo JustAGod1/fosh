@@ -3,10 +3,14 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, write};
 use std::fs::File;
-use std::io::{ErrorKind, Read, stderr, stdin, stdout, Write};
+use std::future::Future;
+use std::io::{Error, ErrorKind, Read, stderr, stdin, stdout, Write};
+use std::os::unix::prelude::{FromRawFd, RawFd};
+use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
-use nix::libc::stat;
+use std::task::{Context, Poll};
+use nix::libc::{dup, stat};
 use parse_display_derive::Display;
 use pipe::{PipeReader, PipeWriter};
 use fosh::error_printer::ErrorType;
@@ -16,20 +20,52 @@ use crate::builtin::engine::parse_tree::{PTNode, PTNodeId};
 use crate::entities;
 
 pub type EntityRef = Rc<RefCell<Entity>>;
+pub type FoshResult<A> = Result<A, EntityExecutionError>;
 
+pub trait AwaitableFuture<T>: Future {
+    fn wait(self: Pin<&mut Self>) -> T;
+}
+
+#[derive(Debug)]
 pub struct ExecutionConfig {
     pub std_in: Option<File>,
     pub std_out: Option<File>,
     pub std_err: Option<File>,
-    pub pt: PTNodeId
+    pub pt: PTNodeId,
 }
 
-pub trait Execution {
-    fn execute(&mut self) -> Result<EntityRef, EntityExecutionError>;
+impl ExecutionConfig {
+    pub fn try_clone(&self) -> Result<ExecutionConfig, Error> {
+        let std_in = match self.std_in.as_ref() {
+            None => {None}
+            Some(f) => { Some(f.try_clone()?)}
+        };
+        let std_out = match self.std_out.as_ref() {
+            None => {None}
+            Some(f) => { Some(f.try_clone()?)}
+        };
+        let std_err = match self.std_err.as_ref() {
+            None => {None}
+            Some(f) => { Some(f.try_clone()?)}
+        };
+        Ok(ExecutionConfig {
+            std_in,
+            std_out,
+            std_err,
+            pt: self.pt,
+        })
+    }
 }
 
-pub struct PseudoExecution {
-    work: Option<Box<dyn FnOnce() -> Result<EntityRef, EntityExecutionError>>>,
+impl ExecutionConfig {
+    pub fn new_with_dup(pt: PTNodeId, std_in: RawFd, std_out: RawFd, std_err: RawFd) -> ExecutionConfig {
+        ExecutionConfig {
+            std_in: Some(unsafe { File::from_raw_fd(dup(std_in)) }),
+            std_out: Some(unsafe { File::from_raw_fd(dup(std_out)) }),
+            std_err: Some(unsafe { File::from_raw_fd(dup(std_err)) }),
+            pt,
+        }
+    }
 }
 
 pub struct ProcessExecution {
@@ -46,15 +82,43 @@ impl ProcessExecution {
     }
 }
 
+pub enum Execution {
+    Pseudo(Box<dyn FnOnce()
+        -> FoshResult<EntityRef>>),
+    Process(ProcessExecution),
+}
+
+impl Execution {
+
+    pub fn execute(mut self) -> FoshResult<EntityRef> {
+        match self {
+            Execution::Pseudo(f) => f(),
+            Execution::Process(mut exec) => exec.execute()
+
+        }
+    }
+
+}
+
+impl Execution {
+
+    fn new_pseudo(
+        f: impl FnOnce()
+            -> Result<EntityRef, EntityExecutionError> + 'static,
+    ) -> Self {
+        Self::Pseudo(Box::new(f))
+    }
+}
+
 pub struct Callee {
     pub arguments: Vec<Argument>,
-    pub callee: Box<dyn Fn(EntityRef, &[EntityRef], ExecutionConfig) -> Result<Box<dyn Execution>, EntityExecutionError>>,
+    pub callee: Box<dyn Fn(EntityRef, &[EntityRef], ExecutionConfig) -> Result<Execution, EntityExecutionError>>,
     pub result_prototype: Option<Box<dyn Fn(EntityRef, &[Option<EntityRef>]) -> Option<EntityRef>>>,
 }
 
 impl Callee {
     pub fn new<F>(block: F) -> Self
-        where F: for<'b> Fn(EntityRef, &'b [EntityRef], ExecutionConfig) -> Result<Box<(dyn Execution)>, EntityExecutionError> + 'static
+        where F: for<'b> Fn(EntityRef, &'b [EntityRef], ExecutionConfig) -> Result<Execution, EntityExecutionError> + 'static
     {
         Self {
             arguments: vec![],
@@ -71,7 +135,7 @@ impl Callee {
             arguments: vec![],
             callee: Box::new(move |_me, args, mut config| {
                 let entities = args.iter().map(|a| a.clone()).collect::<Vec<_>>();
-                let execution = PseudoExecution::from(move || {
+                let execution = Execution::new_pseudo(move || {
                     let mut stdin = stdin();
                     let mut stdout = stdout();
                     let mut stderr = stderr();
@@ -81,7 +145,7 @@ impl Callee {
 
                     block(config.pt, &entities, &mut stdin, &mut stdout, &mut stderr)
                 });
-                Ok(Box::new(execution))
+                Ok(execution)
             }),
             result_prototype: None,
         }
@@ -93,48 +157,40 @@ impl Callee {
     }
 
     pub fn with_result_prototype<F>(mut self, prototype: F) -> Self
-    where F : Fn(EntityRef, &[Option<EntityRef>]) -> Option<EntityRef> + 'static
+        where F: Fn(EntityRef, &[Option<EntityRef>]) -> Option<EntityRef> + 'static
     {
         self.result_prototype = Some(Box::new(prototype));
         self
     }
 }
 
-impl PseudoExecution {
-    pub fn from<F>(work: F) -> Self
-        where F: FnOnce() -> Result<EntityRef, EntityExecutionError> + 'static
-    {
-        Self {
-            work: Some(Box::new(work))
+impl ProcessExecution {
+    pub fn execute(mut self) -> FoshResult<EntityRef> {
+        match self.child.wait() {
+            Ok(status) => {
+                if status.success() {
+                    Ok(entities()
+                        .make_entity("Execution result".to_string())
+                        .with_property("status", Value::Number(status.code().unwrap_or(-1) as f64).into_entity())
+                    )
+                } else {
+                    Err(EntityExecutionError::new_single(self.node_id, ErrorType::Execution, format!("Execution failed with status {}", status)))
+                }
+            }
+            Err(e) => {
+                Err(EntityExecutionError::new_single(self.node_id, ErrorType::Execution, e.to_string()))
+            }
         }
     }
 }
 
-impl Execution for PseudoExecution {
-    fn execute(&mut self) -> Result<EntityRef, EntityExecutionError> {
-        let mut work = None::<_>;
-        std::mem::swap(&mut work, &mut self.work);
-        work.expect("Cannot call execution twice")()
-    }
-}
 
 
-impl Execution for ProcessExecution {
-    fn execute(&mut self) -> Result<EntityRef, EntityExecutionError> {
-        let status = self.child.wait().map_err(|x| EntityExecutionError::new_single(self.node_id, ErrorType::Execution, format!("{:?}", x)))?;
-        Ok(
-            entities()
-                .make_entity("Execution result".to_string())
-                .with_property("status", Value::Number(status.code().unwrap_or(-1) as f64).into_entity())
-        )
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ErrorData {
     pub kind: ErrorType,
     pub hints: Vec<String>,
-    pub notes: Vec<String>
+    pub notes: Vec<String>,
 }
 
 impl ErrorData {
@@ -157,7 +213,7 @@ impl ErrorData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EntityExecutionError {
     pub errors: HashMap<PTNodeId, ErrorData>,
 }
@@ -169,7 +225,7 @@ impl EntityExecutionError {
         }
     }
 
-    pub fn new_single<S : Into<String>>(node_id: PTNodeId, kind: ErrorType, note: S) -> Self {
+    pub fn new_single<S: Into<String>>(node_id: PTNodeId, kind: ErrorType, note: S) -> Self {
         let mut r = Self::new();
         r.with_error(node_id, kind).with_notes(vec![note.into()]);
         r
@@ -184,7 +240,7 @@ impl EntityExecutionError {
 pub struct Entity {
     name: String,
 
-    implicits: HashMap<Type, Box<dyn Fn(EntityRef) -> Value +'static>>,
+    implicits: HashMap<Type, Box<dyn Fn(EntityRef) -> Value + 'static>>,
     callee: Option<Box<Callee>>,
 
     properties: HashMap<String, EntityRef>,
@@ -222,7 +278,6 @@ pub struct Comms<'a> {
 }
 
 impl Entity {
-
     pub fn implicits(&self) -> &HashMap<Type, Box<dyn Fn(EntityRef) -> Value + 'static>> {
         &self.implicits
     }
@@ -332,7 +387,7 @@ impl EntitiesManager {
             implicits: HashMap::new(),
             callee: None,
             properties: HashMap::new(),
-            prototype: Some(self.any.clone())
+            prototype: Some(self.any.clone()),
         }))
     }
 
@@ -343,5 +398,4 @@ impl EntitiesManager {
     pub fn any(&self) -> EntityRef {
         self.any.clone()
     }
-
 }

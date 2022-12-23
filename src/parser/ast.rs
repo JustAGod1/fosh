@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display, format};
 use std::fs::File;
+use std::os::unix::io::RawFd;
 use std::os::unix::prelude::{AsRawFd, CommandExt, FromRawFd};
 use std::process::{Child, Stdio};
 use std::rc::Rc;
@@ -9,7 +10,7 @@ use lalrpop_util::lexer::Token;
 use nix::unistd::dup2;
 use termion::color::{Bg, Cyan, Fg, Green, LightGreen, LightMagenta, LightYellow, Magenta, Red, Yellow};
 use fosh::error_printer::ErrorType;
-use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, FoshEntity, EntityExecutionError, EntityRef, Execution, ProcessExecution};
+use crate::builtin::engine::entities::{Callee, EntitiesManager, Entity, FoshEntity, EntityExecutionError, EntityRef, ProcessExecution, Execution};
 use crate::builtin::engine::parse_tree::{PTNode, PTNodeId};
 use crate::builtin::engine::{Type, Value};
 use crate::entities;
@@ -479,12 +480,12 @@ impl Typed for Command {
                 match command.spawn() {
                     Ok(child) => {
                         unsafe {
-                            redir(child.stdout.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_out, node_id)?;
-                            redir(child.stderr.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_err, node_id)?;
-                            redir(child.stdin.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_in, node_id)?;
+                            //redir(child.stdout.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_out, node_id)?;
+                            //redir(child.stderr.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_err, node_id)?;
+                            //redir(child.stdin.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_in, node_id)?;
                         }
 
-                        Ok(Box::new(ProcessExecution::new(child, node_id)))
+                        Ok(Execution::Process(ProcessExecution::new(child, node_id)))
                     }
                     Err(e) => {
                         let mut err = EntityExecutionError::new();
