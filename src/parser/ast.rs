@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display, format};
 use std::fs::File;
+use std::io::{Error, ErrorKind, stderr, stdin, stdout};
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::{AsRawFd, CommandExt, FromRawFd};
 use std::process::{Child, Stdio};
@@ -80,7 +81,6 @@ impl ASTNode {
         }
         return None;
     }
-
 }
 
 
@@ -364,7 +364,7 @@ impl Typed for PropertyCall {
             if callee.result_prototype.is_none() { return None; }
             let result_prototype = callee.result_prototype.as_ref().unwrap();
             let right = pt.children()[1];
-            let values : Vec<Option<EntityRef>> = right.children().iter()
+            let values: Vec<Option<EntityRef>> = right.children().iter()
                 .filter(|a| downcast_to_typed(a).is_some())
                 .map(|a| downcast_to_typed(a).unwrap().infer_value(a))
                 .collect();
@@ -378,12 +378,11 @@ impl Typed for PropertyCall {
                 }
             }
 
-            return result_prototype(left.clone(), &args)
+            return result_prototype(left.clone(), &args);
         }
 
         None
     }
-
 }
 
 impl Typed for PropertyName {
@@ -400,7 +399,7 @@ impl Typed for PropertyInsn {
         let left = pt.children()[0];
 
         let left = downcast_to_typed(left).unwrap().infer_value(left);
-        if pt.children().len() == 1 { return left;}
+        if pt.children().len() == 1 { return left; }
         if left.is_none() { return None; }
         let left = left.unwrap();
 
@@ -408,9 +407,9 @@ impl Typed for PropertyInsn {
         let right = pt.children()[2];
         let name = right.data;
 
-        let x = left.borrow().properties().get(name).map(|x| x.clone()); x
+        let x = left.borrow().properties().get(name).map(|x| x.clone());
+        x
     }
-
 }
 
 impl Typed for BracedCommand {
@@ -452,39 +451,30 @@ impl Typed for Command {
         let entity = entity.with_callee(
             Callee::new(move |_me, parameters, config| {
                 let mut command = std::process::Command::new(name.clone());
-                command.args(args.clone());
-
-                if config.std_out.is_some() {
-                    command.stdout(Stdio::piped());
-                }
-                if config.std_in.is_some() {
-                    command.stdin(Stdio::piped());
-                }
-                if config.std_err.is_some() {
-                    command.stderr(Stdio::piped());
-                }
-
-                fn redir(old: Option<File>, new: Option<File>, id: PTNodeId) -> Result<(), EntityExecutionError> {
-                    if let Some(old) = old {
-                        if let Some(new) = new {
-                            dup2(old.as_raw_fd(), new.as_raw_fd()).map_err(|e| {
-                                let mut err = EntityExecutionError::new();
-                                err.with_error(id, ErrorType::Execution).with_notes(vec![e.to_string()]);
-                                err
-                            })?;
-                        }
+                fn redir(old: RawFd, new: Option<File>) -> Result<(), Error> {
+                    if let Some(new) = new {
+                        dup2(old, new.as_raw_fd()).map_err(|e| {
+                            Error::new(ErrorKind::Other, format!("dup2 failed: {}", e))
+                        })?;
                     }
 
                     Ok(())
                 }
+                command.args(args.clone());
+
+                let config = config;
+                if config.std_out.is_some() {
+                    command.stdout(Stdio::from(config.std_out.unwrap()));
+                }
+                if config.std_err.is_some() {
+                    command.stderr(Stdio::from(config.std_err.unwrap()));
+                }
+                if config.std_in.is_some() {
+                    command.stdin(Stdio::from(config.std_in.unwrap()));
+                }
+
                 match command.spawn() {
                     Ok(child) => {
-                        unsafe {
-                            //redir(child.stdout.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_out, node_id)?;
-                            //redir(child.stderr.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_err, node_id)?;
-                            //redir(child.stdin.as_ref().map(|x| File::from_raw_fd(x.as_raw_fd())), config.std_in, node_id)?;
-                        }
-
                         Ok(Execution::Process(ProcessExecution::new(child, node_id)))
                     }
                     Err(e) => {

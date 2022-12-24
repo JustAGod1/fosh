@@ -5,12 +5,14 @@ use std::fmt::{Display, Formatter, write};
 use std::fs::File;
 use std::future::Future;
 use std::io::{Error, ErrorKind, Read, stderr, stdin, stdout, Write};
+use std::os::unix::io::{AsFd, OwnedFd};
 use std::os::unix::prelude::{FromRawFd, RawFd};
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::task::{Context, Poll};
-use nix::libc::{dup, stat};
+use nix::libc::{stat};
+use nix::unistd::dup;
 use parse_display_derive::Display;
 use pipe::{PipeReader, PipeWriter};
 use fosh::error_printer::ErrorType;
@@ -28,9 +30,9 @@ pub trait AwaitableFuture<T>: Future {
 
 #[derive(Debug)]
 pub struct ExecutionConfig {
-    pub std_in: Option<File>,
-    pub std_out: Option<File>,
-    pub std_err: Option<File>,
+    pub std_in: Option<OwnedFd>,
+    pub std_out: Option<OwnedFd>,
+    pub std_err: Option<OwnedFd>,
     pub pt: PTNodeId,
 }
 
@@ -58,13 +60,13 @@ impl ExecutionConfig {
 }
 
 impl ExecutionConfig {
-    pub fn new_with_dup(pt: PTNodeId, std_in: RawFd, std_out: RawFd, std_err: RawFd) -> ExecutionConfig {
-        ExecutionConfig {
-            std_in: Some(unsafe { File::from_raw_fd(dup(std_in)) }),
-            std_out: Some(unsafe { File::from_raw_fd(dup(std_out)) }),
-            std_err: Some(unsafe { File::from_raw_fd(dup(std_err)) }),
+    pub fn new_with_dup(pt: PTNodeId, std_in: &OwnedFd, std_out: &OwnedFd, std_err: &OwnedFd) -> Result<ExecutionConfig, Error> {
+        Ok(ExecutionConfig {
+            std_in: Some(std_in.try_clone()?),
+            std_out: Some(std_out.try_clone()?),
+            std_err: Some(std_err.try_clone()?),
             pt,
-        }
+        })
     }
 }
 
@@ -136,12 +138,31 @@ impl Callee {
             callee: Box::new(move |_me, args, mut config| {
                 let entities = args.iter().map(|a| a.clone()).collect::<Vec<_>>();
                 let execution = Execution::new_pseudo(move || {
-                    let mut stdin = stdin();
-                    let mut stdout = stdout();
-                    let mut stderr = stderr();
-                    let mut stderr = config.std_err.as_mut().map(|a| a as &mut dyn Write).unwrap_or_else(|| &mut stderr);
-                    let mut stdout = config.std_out.as_mut().map(|a| a as &mut dyn Write).unwrap_or_else(|| &mut stdout);
-                    let mut stdin = config.std_in.as_mut().map(|a| a as &mut dyn Read).unwrap_or_else(|| &mut stdin);
+                    let stdin = stdin();
+                    let stdout = stdout();
+                    let stderr = stderr();
+                    let stderr = config.std_err.as_mut().map(|a| a.as_fd().try_clone_to_owned()).unwrap_or_else(|| stderr.as_fd().try_clone_to_owned());
+                    let stdout = config.std_out.as_mut().map(|a| a.as_fd().try_clone_to_owned()).unwrap_or_else(|| stdout.as_fd().try_clone_to_owned());
+                    let stdin = config.std_in.as_mut().map(|a| a.as_fd().try_clone_to_owned()).unwrap_or_else(|| stdin.as_fd().try_clone_to_owned());
+
+                    if stdin.is_err() {
+                        return Err(EntityExecutionError::new_single(config.pt, ErrorType::CannotCloneFd, format!("{}", stdin.err().unwrap())));
+                    }
+                    let stdin = stdin.unwrap();
+
+                    if stdout.is_err() {
+                        return Err(EntityExecutionError::new_single(config.pt, ErrorType::CannotCloneFd, format!("{}", stdout.err().unwrap())));
+                    }
+                    let stdout = stdout.unwrap();
+
+                    if stderr.is_err() {
+                        return Err(EntityExecutionError::new_single(config.pt, ErrorType::CannotCloneFd, format!("{}", stderr.err().unwrap())));
+                    }
+                    let stderr = stderr.unwrap();
+
+                    let mut stdin = File::from(stdin);
+                    let mut stdout = File::from(stdout);
+                    let mut stderr = File::from(stderr);
 
                     block(config.pt, &entities, &mut stdin, &mut stdout, &mut stderr)
                 });

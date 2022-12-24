@@ -9,7 +9,7 @@ pub enum ErrorType {
     Semantic,
     Execution,
     CannotCreatePipe,
-    CannotCloneExecutionConfig
+    CannotCloneFd
 }
 
 pub struct ErrorReport<'a> {

@@ -4,7 +4,9 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::future::Future;
 use std::io::{Error, Read, stderr, stdin, stdout, Write};
+use std::mem::ManuallyDrop;
 use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::prelude::{AsFd, OwnedFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use futures::future::BoxFuture;
@@ -63,23 +65,56 @@ fn execute_piped<'a>(command: &'a PTNode<'a>, execution: &ExecutionConfig) -> Ex
     if command.kind != ASTKind::Piped {
         execute_command_or_function(command, execution)
     } else {
-        let mut stdout = stdout();
-        let mut stderr = stderr();
-        let mut stdin = stdin();
-        let final_err = execution.std_err.as_ref().map(|a| a.as_raw_fd()).unwrap_or_else(|| stderr.as_raw_fd());
-        let final_out = execution.std_out.as_ref().map(|a| a.as_raw_fd()).unwrap_or_else(|| stdout.as_raw_fd());
-        let first_in = execution.std_in.as_ref().map(|a| a.as_raw_fd()).unwrap_or_else(|| stdin.as_raw_fd());
+        let stdout = stdout();
+        let stderr = stderr();
+        let stdin = stdin();
+        let final_err = execution.std_err.as_ref()
+            .map(|e| e.try_clone())
+            .unwrap_or_else(|| stderr.as_fd().try_clone_to_owned());
+        let final_out = execution.std_out.as_ref()
+            .map(|e| e.try_clone())
+            .unwrap_or_else(|| stderr.as_fd().try_clone_to_owned());
+        let first_in = execution.std_in.as_ref()
+            .map(|e| e.try_clone())
+            .unwrap_or_else(|| stderr.as_fd().try_clone_to_owned());
 
-        let mut children = command.children().iter()
-            .filter(|c| c.kind != ASTKind::SemiColon)
+        if final_err.is_err() {
+            return Err(EntityExecutionError::new_single(
+                command.id(),
+                ErrorType::CannotCloneFd,
+                final_err.err().unwrap().to_string()
+            )).into();
+        }
+        let final_err = final_err.unwrap();
+
+        if final_out.is_err() {
+            return Err(EntityExecutionError::new_single(
+                command.id(),
+                ErrorType::CannotCloneFd,
+                final_out.err().unwrap().to_string()
+            )).into();
+        }
+        let final_out = final_out.unwrap();
+
+        if first_in.is_err() {
+            return Err(EntityExecutionError::new_single(
+                command.id(),
+                ErrorType::CannotCloneFd,
+                first_in.err().unwrap().to_string()
+            )).into();
+        }
+        let first_in = first_in.unwrap();
+
+        let children = command.children().iter()
+            .filter(|c| c.kind != ASTKind::Pipe)
             .map(|c| *c)
             .collect::<Vec<_>>();
 
         let mut last_read = first_in;
         let mut executions = VecDeque::new();
         for i in 0..children.len() {
-            let mut child = children[i];
-            let mut config = if i != children.len() - 1 {
+            let child = children[i];
+            let config = if i != children.len() - 1 {
                 let pipe_result = pipe();
 
                 if let Err(e) = pipe_result {
@@ -91,28 +126,39 @@ fn execute_piped<'a>(command: &'a PTNode<'a>, execution: &ExecutionConfig) -> Ex
                 }
 
                 let (read, write) = pipe_result.unwrap();
-                let config = unsafe {
-                    ExecutionConfig {
-                        pt: child.id(),
-                        std_out: Some(File::from_raw_fd(write)),
-                        std_err: Some(File::from_raw_fd(final_err)),
-                        std_in: Some(File::from_raw_fd(last_read)),
-                    }
-                };
+
+                let read = unsafe { OwnedFd::from_raw_fd(read) };
+                let write = unsafe { OwnedFd::from_raw_fd(write) };
+                let config = ExecutionConfig::new_with_dup(
+                    child.id(),
+                    &last_read,
+                    &write,
+                    &final_err
+                );
                 last_read = read;
                 config
             } else {
-                unsafe {
-                    ExecutionConfig {
-                        pt: child.id(),
-                        std_out: Some(File::from_raw_fd(final_out)),
-                        std_err: Some(File::from_raw_fd(final_err)),
-                        std_in: Some(File::from_raw_fd(last_read)),
-                    }
+                ExecutionConfig::new_with_dup(
+                    child.id(),
+                    &last_read,
+                    &final_out,
+                    &final_err
+                )
+            };
+
+            let config = match config {
+                Ok(c) => c,
+                Err(e) => return {
+                    Err(EntityExecutionError::new_single(
+                        command.id(),
+                        ErrorType::CannotCreatePipe,
+                        format!("Cannot create pipe: {}", e),
+                    )).into()
                 }
             };
 
             let r = execute_command_or_function(child, &config);
+            std::mem::drop(config);
 
             executions.push_back(r);
         }
@@ -145,7 +191,7 @@ fn execute_command_or_function<'a>(command: &'a PTNode<'a>, execution: &Executio
                             let config = match execution.try_clone() {
                                 Ok(c) => c,
                                 Err(e) => {
-                                    return Err(EntityExecutionError::new_single(command.id(), ErrorType::CannotCloneExecutionConfig, format!("Cannot clone execution config: {}", e))).into();
+                                    return Err(EntityExecutionError::new_single(command.id(), ErrorType::CannotCloneFd, format!("Cannot clone execution config: {}", e))).into();
                                 }
                             };
                             match (exe.callee)(e.clone(), &[], config) {
@@ -257,7 +303,7 @@ fn property_call_execution<'a>(command: &'a PTNode<'a>, execution: &ExecutionCon
             let config = match execution.try_clone() {
                 Ok(c) => c,
                 Err(e) => {
-                    return Err(EntityExecutionError::new_single(command.id(), ErrorType::CannotCloneExecutionConfig, format!("Cannot clone execution config: {}", e))).into();
+                    return Err(EntityExecutionError::new_single(command.id(), ErrorType::CannotCloneFd, format!("Cannot clone execution config: {}", e))).into();
                 }
             };
             match (exe.callee)(left.clone(), &args, config) {
